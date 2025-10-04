@@ -1,0 +1,118 @@
+# ==============================
+# Focus Tools Global Config
+# ==============================
+# This file defines global defaults, aliases, weights, and reusable profiles
+# for focus_tree, focus_grep, and focus_probe.
+
+# --------------------------------
+# 🔤 Aliases — keyword expansions
+# --------------------------------
+aliases:
+  spot: [spot_ros2, spot_robot, spot_sdk, spot_control]
+  ros: [ros2, ros_ws, catkin_ws, ros_workspace]
+  amp: [amp_core, amp_system, amp_project]
+  bdai: [bdai_main, bdai_core, bdai_sdk]
+  docs: [doc, docs, documentation, sphinx, guide]
+  teleop: [teleoperation, joystick, wasd, keyboard, rviz, cmd_vel]
+  config: [configs, configuration, parameters, yaml]
+
+# --------------------------------
+# ⚙️ Defaults — base search settings
+# --------------------------------
+defaults:
+  include:
+    - "*.py"
+    - "*.launch.py"
+    - "*.md"
+    - "*.rst"
+    - "*.yaml"
+    - "*.yml"
+  exclude:
+    - "*.min.js"
+    - "*.lock"
+    - "*.bin"
+    - "*.exe"
+    - "*.dll"
+    - "*.so"
+    - "*.dylib"
+  exclude_dirs:
+    - .git
+    - .vscode
+    - node_modules
+    - __pycache__
+    - build
+    - dist
+  depth: 3
+  limit: 250
+  context: 3
+  per_file_limit: 25
+  total_limit: 500
+  max_file_bytes: 2500000  # ~2.5MB safety bound
+
+# --------------------------------
+# 🧮 Weights — file type importance
+# --------------------------------
+weights:
+  .launch.py: 2.0
+  .py: 1.2
+  .md: 1.5
+  .rst: 1.4
+  .yaml: 1.3
+  .yml: 1.3
+  .cpp: 1.1
+  .hpp: 1.1
+  .json: 1.0
+  .txt: 0.8
+
+# --------------------------------
+# 🧩 Profiles — reusable configurations
+# --------------------------------
+profiles:
+
+  # -- ROS-focused probe --
+  ros2-core:
+    must_parent_all: [ws, src]
+    include: ["*.py", "*.launch.py", "*.yaml"]
+    regex: true
+    top_files: 10
+    peek: true
+    read_bytes: 8000
+
+  # -- Spot robot teleoperation --
+  teleop-scout:
+    must_parent_all: [ws, src]
+    name_regex: "spot_.*"
+    include: ["*.py", "*.launch.py", "*.md"]
+    pattern: "(teleop|wasd|rviz|launch|cmd_vel)"
+    regex: true
+    ignore_case: true
+    top_files: 8
+    peek: true
+    read_bytes: 12000
+
+  # -- Documentation discovery --
+  doc-hunter:
+    must_parent: [src, docs, doc]
+    must_contain: [index.rst, conf.py]
+    include: ["*.md", "*.rst"]
+    contain_depth: 2
+    name_exact: [doc, docs]
+    top_files: 10
+    peek: true
+
+  # -- Parameter / Config scans --
+  config-audit:
+    must_parent_all: [src]
+    include: ["*.yaml", "*.yml"]
+    pattern: "(rate|timeout|topic|frame|namespace)"
+    regex: true
+    ignore_case: true
+    top_files: 15
+    peek: true
+
+  # -- Quick search baseline --
+  fast-scan:
+    include: ["*.py", "*.md"]
+    top_files: 5
+    peek: false
+    read_bytes: 4000
