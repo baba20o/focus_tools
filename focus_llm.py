@@ -275,7 +275,8 @@ def mini_rescore(question: str, file_heads: dict) -> List[Dict[str, Any]]:
         )
         user = {"role": "user", "content": content}
         try:
-            raw = call_openai([system, user], model=models["mini"], temperature=0.0, debug=os.getenv("FOCUS_DEBUG_LLM","0").strip() in ("1","true","True"), label="rescore")
+            # Some models do not support setting temperature; omit it here.
+            raw = call_openai([system, user], model=models["mini"], debug=os.getenv("FOCUS_DEBUG_LLM","0").strip() in ("1","true","True"), label="rescore")
             data = json.loads(raw)
             score = float(data.get("score", 0.0))
             typ = str(data.get("type", "unknown"))
@@ -283,6 +284,21 @@ def mini_rescore(question: str, file_heads: dict) -> List[Dict[str, Any]]:
         except Exception as e:
             out.append({"path": path, "mini_score": 0.5, "type": "error", "error": str(e)})
     return out
+
+
+def _add_filename_globs_by_intent(question: str, plan: Dict[str, Any]) -> Dict[str, Any]:
+    q = (question or "").lower()
+    globs: List[str] = list(plan.get("file_name_globs") or [])
+    # Robot action style questions
+    if "robot action" in q and "robot_actions.py" not in globs:
+        globs.append("robot_actions.py")
+    # Build/dependency style questions
+    if ("python package" in q or "dependency" in q or "pyproject" in q) and "pyproject.toml" not in globs:
+        globs.extend(["pyproject.toml", "Dockerfile*"])
+    # Symbol questions: leave to content grep (no specific filename), but could add patterns later
+    if globs:
+        plan["file_name_globs"] = sorted(set(globs))
+    return plan
 
 
 def _rule_based_plan(question: str) -> Dict[str, Any]:
@@ -359,6 +375,8 @@ def main(argv: List[str]) -> int:
         print("STEP 1: CLASSIFY", file=sys.stderr)
         print("="*80, file=sys.stderr)
     plan1 = classify(question, trace=trace) if not dry else _rule_based_plan(question)
+    # Enrich plan with filename globs by intent (works for both rule-based and LLM plans)
+    plan1 = _add_filename_globs_by_intent(question, plan1)
     if verbose:
         print(f"Question: {question}", file=sys.stderr)
         print(f"Plan: {json.dumps(plan1, indent=2)}", file=sys.stderr)
@@ -470,6 +488,29 @@ def main(argv: List[str]) -> int:
         print(f"Refined plan: {json.dumps(plan1, indent=2)}", file=sys.stderr)
 
     bundle2 = run_focus_probe(plan1, base)
+    
+    # Choose best of initial vs follow-up bundles to avoid regressions
+    def _bundle_score(b: Dict[str, Any]) -> float:
+        if not b:
+            return 0.0
+        fwh = float(b.get('files_with_hits', 0) or 0)
+        tf = b.get('top_files') or []
+        # Count authority files in top files by suffix
+        auth_ext = {'.msg', '.idl', '.srv', '.urdf', '.xacro'}
+        auth_count = 0
+        extracted_bonus = 0
+        for f in tf:
+            p = str(f.get('path','')).lower()
+            for ext in auth_ext:
+                if p.endswith(ext):
+                    auth_count += 1
+                    break
+            if f.get('extracted_msg_fields') or f.get('extracted_urdf_joints'):
+                extracted_bonus += 1
+        # files_with_hits dominates; authority and extraction nudge score
+        return fwh + 0.3*auth_count + 0.2*extracted_bonus + 0.05*len(tf)
+
+    better = bundle2 if _bundle_score(bundle2) >= _bundle_score(bundle1) else bundle1
     if verbose:
         print(f"Follow-up results:", file=sys.stderr)
         print(f"  Dirs found: {bundle2.get('dirs_found', 0)}", file=sys.stderr)
@@ -478,7 +519,7 @@ def main(argv: List[str]) -> int:
         print("STEP 4: ANSWER", file=sys.stderr)
         print("="*80, file=sys.stderr)
     
-    out = answer(question, bundle2, trace=trace) if not dry else ""
+    out = answer(question, better, trace=trace) if not dry else ""
     print(out)
     if trace_out:
         Path(trace_out).write_text(json.dumps(trace, indent=2), encoding="utf-8")

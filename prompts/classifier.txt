@@ -32,7 +32,8 @@ Return strict JSON with these fields (omit if not needed):
   "top_files": 8,
   "peek": true,
   "read_bytes": 0,
-  "budget_tokens": 8000
+  "budget_tokens": 8000,
+  "file_name_globs": ["robot_actions.py","pyproject.toml","Dockerfile*"]
 }
 
 Examples (for guidance only; output JSON only for the new question):
@@ -52,5 +53,13 @@ Output:
 Question: What does AMP stand for?
 Output:
 {"keyword":"amp","profile":"doc-hunter","pattern":"(AMP|Agile.*Manipulation|platform)","regex":true,"include":["*.md","*.rst","*.txt"],"content_first":true,"not_parent":["tests","examples","archived","external"],"top_files":8,"peek":true,"read_bytes":0,"budget_tokens":6000}
+
+Question: Where can I add a new robot action?
+Output:
+{"keyword":"alpha","profile":"","pattern":"robot_actions.py","regex":false,"include":["*.py","*.md"],"content_first":true,"not_parent":["tests","examples","archived"],"top_files":8,"peek":true,"file_name_globs":["robot_actions.py"]}
+
+Question: How do I add a new Python package?
+Output:
+{"keyword":"docs","profile":"build-deps","pattern":"(pyproject|Dockerfile)","regex":true,"include":["pyproject.toml","Dockerfile*","*.md"],"content_first":true,"not_parent":["tests","examples","archived"],"top_files":10,"peek":true,"file_name_globs":["pyproject.toml","Dockerfile*"]}
 
 Do not add prose. Output JSON only.

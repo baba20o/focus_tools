@@ -134,12 +134,44 @@ def auto_grade(expected: str, actual: str) -> Tuple[int, str]:
         return 1, f"auto_minimal_coverage_{coverage:.2f}"
 
 
+def llm_grade(expected: str, actual: str) -> Tuple[int, str]:
+    """Use OPENAI_MINI_MODEL (or OPENAI_MODEL) to grade ACTUAL vs EXPECTED.
+    Returns (grade 1-5, reasoning). Falls back to auto_grade on error.
+    """
+    try:
+        import os
+        from openai import OpenAI  # type: ignore
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("Missing OPENAI_API_KEY")
+        model = (os.getenv("OPENAI_MINI_MODEL", "") or os.getenv("OPENAI_MODEL", "")).strip()
+        if not model:
+            raise RuntimeError("Missing model envs")
+        client = OpenAI(api_key=api_key)  # type: ignore
+        system = {"role": "system", "content": (
+            "You are a strict grader. Return strict JSON: {\"grade\":1-5,\"reasoning\":string}.\n"
+            "Grade the ACTUAL answer against the EXPECTED reference succinctly; be fair but conservative."
+        )}
+        user = {"role": "user", "content": f"EXPECTED:\n{expected}\n\nACTUAL:\n{actual}"}
+        resp = client.chat.completions.create(model=model, messages=[system, user])  # type: ignore
+        content = resp.choices[0].message.content or ""
+        data = json.loads(content)
+        g = int(data.get("grade", 0))
+        r = str(data.get("reasoning", ""))
+        if 1 <= g <= 5:
+            return g, r or "llm_grade"
+        return auto_grade(expected, actual)
+    except Exception:
+        return auto_grade(expected, actual)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Benchmark focus_llm against AMP test questions")
     parser.add_argument("-b", "--base", required=True, help="Base repository path")
     parser.add_argument("--csv", default="AMP_Test_Questions.csv", help="CSV file with questions")
     parser.add_argument("--trace-dir", default=None, help="Directory to save trace files")
     parser.add_argument("--auto-grade", action="store_true", help="Use automatic grading (heuristic)")
+    parser.add_argument("--llm-grade", action="store_true", help="Use mini LLM to grade answers vs expected")
     parser.add_argument("--output", default="benchmark_results.json", help="Output results JSON file")
     parser.add_argument("--llm-verbose", action="store_true", help="Pass --verbose to focus_llm for step logging")
     parser.add_argument("--llm-debug", action="store_true", help="Pass --debug-llm to focus_llm to show prompts and outputs")
@@ -198,7 +230,10 @@ def main():
         print(f"  ⏱️  Latency: {latency:.2f}s")
         
         # Grade
-        if args.auto_grade:
+        if args.llm_grade:
+            grade, reasoning = llm_grade(expected, actual)
+            print(f"  🤖 LLM-grade: {grade}/5 ({reasoning})")
+        elif args.auto_grade:
             grade, reasoning = auto_grade(expected, actual)
             print(f"  🎯 Auto-grade: {grade}/5 ({reasoning})")
         else:
