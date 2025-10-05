@@ -79,6 +79,87 @@ def _extract_urdf_joints(text: str) -> list[str]:
     names = _re.findall(r'<\s*joint[^>]*name\s*=\s*"([^"]+)"', text, flags=_re.IGNORECASE)
     return names
 
+def _parse_msg_types(text: str) -> list[str]:
+    types: list[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith('#'):
+            continue
+        # type can be like 'pkg/Type name' or 'Type name'
+        tok = s.split()[0]
+        if '/' in tok:
+            tok = tok.split('/')[-1]
+        # basic filter for primitive types
+        if tok.lower() in {"bool","int8","uint8","int16","uint16","int32","uint32","int64","uint64","float32","float64","string","time","duration"}:
+            continue
+        # arrays like Type[]
+        tok = tok.replace('[]','').strip()
+        if tok and tok not in types:
+            types.append(tok)
+    return types
+
+def _find_msg_file(type_name: str, search_roots: list[Path]) -> Optional[Path]:
+    cand = f"{type_name}.msg"
+    for root in search_roots:
+        try:
+            for p in root.rglob(cand):
+                return p
+        except Exception:
+            continue
+    return None
+
+def _extract_python_symbol_block(text: str, name: str, max_lines: int = 60) -> list[dict]:
+    lines = text.splitlines()
+    target = None
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith(f"def {name}"):
+            target = i
+            break
+    if target is None:
+        return []
+    # naive block capture: next max_lines or until next top-level def/class
+    out = []
+    end = min(len(lines), target + max_lines)
+    for j in range(target, end):
+        out.append({"line": j+1, "text": lines[j]})
+        s = lines[j].lstrip()
+        if j > target and (s.startswith("def ") or s.startswith("class ")):
+            break
+    return out
+
+def _extract_msg_nested(types: list[str], search_roots: list[Path], max_depth: int = 2, max_types: int = 20) -> dict:
+    """Breadth-limited nested .msg extraction up to max_depth levels.
+    Returns {type_name: [field, ...]}.
+    """
+    nested: dict[str, list[str]] = {}
+    visited: set[str] = set()
+    from collections import deque
+    q = deque([(t, 1) for t in types[:max_types]])
+    while q and len(visited) < max_types:
+        t, depth = q.popleft()
+        if t in visited:
+            continue
+        visited.add(t)
+        msgp = _find_msg_file(t, search_roots)
+        if not msgp:
+            continue
+        txt = ""
+        try:
+            txt = read_text_bounded(msgp, 20000) or ""
+        except Exception:
+            txt = ""
+        if not txt:
+            continue
+        fields = _extract_msg_fields(txt)[:50]
+        if fields:
+            nested[t] = fields
+        if depth < max_depth:
+            sub_types = _parse_msg_types(txt)
+            for st in sub_types:
+                if st not in visited:
+                    q.append((st, depth + 1))
+    return nested
+
 def grep_file(path: Path, pattern: str, regex: bool, ignore_case: bool,
               per_file_limit: int, context: int, max_file_bytes: int) -> Dict[str, Any]:
     result: Dict[str, Any] = {"path": str(path), "hits": 0, "snippets": []}
@@ -372,10 +453,17 @@ def file_score(r: Dict[str, Any], weights: Dict[str, float], pattern: str = "") 
     if pattern:
         definition_boost = detect_definition_boost(p, pattern, r.get("snippets", []))
         base_score *= definition_boost
-    # Authority directory hint boost
+    # Authority directory hint boost / demotion for low-authority dirs
     parts = {s.lower() for s in p.parts}
     if parts & {"msg", "srv", "urdf", "description", "action"}:
-        base_score *= 1.2
+        base_score *= 1.4
+    if parts & {"legacy", "archived", "deprecated"}:
+        base_score *= 0.85
+    if parts & {"examples", "example", "test", "tests"}:
+        base_score *= 0.9
+    # Slight bonus for README.md (tends to be authoritative)
+    if p.name.lower() == "readme.md":
+        base_score *= 1.1
     if r.get("filename_hit"):
         base_score *= 2.0
 
@@ -631,6 +719,8 @@ def main():
         head_lines = int(merged.get("peek_head_lines", 80))
         tail_lines = int(merged.get("peek_tail_lines", 40))
         max_bytes = int(merged.get("max_file_bytes", DEFAULT_MAX_FILE_BYTES))
+        any_symbol_found = False
+        inferred_symbol: Optional[str] = None
         for r in top:
             p = Path(r["path"])
             # Prefer focus_read for bounded, binary-safe peeks when available
@@ -682,13 +772,60 @@ def main():
                     fields = _extract_msg_fields(full)
                     if fields:
                         r["extracted_msg_fields"] = fields[:50]
+                        # Attempt nested message extraction (bounded)
+                        types = _parse_msg_types(full)[:8]
+                        if types:
+                            search_roots = list(bases)
+                            search_roots.append(p.parent)
+                            nested = _extract_msg_nested(types, search_roots, max_depth=2, max_types=20)
+                            if nested:
+                                r["extracted_msg_nested"] = nested
                 if p.suffix.lower() in {".urdf", ".xacro"}:
                     full = read_text_bounded(p, max_bytes) or ""
                     joints = _extract_urdf_joints(full)
                     if joints:
                         r["extracted_urdf_joints"] = sorted(set(joints))[:200]
+                # Basic Python symbol block extraction when pattern looks like a name
+                sym = None
+                try:
+                    # derive symbol hint from args.pattern
+                    if args.pattern and isinstance(args.pattern, str):
+                        m = re.search(r"\b([A-Za-z_]\w{2,})\b", args.pattern)
+                        if m:
+                            sym = m.group(1)
+                except Exception:
+                    sym = None
+                if sym and p.suffix.lower() == ".py":
+                    full = read_text_bounded(p, max_bytes) or ""
+                    block = _extract_python_symbol_block(full, sym, max_lines=80)
+                    if block:
+                        r["extracted_symbol"] = {"name": sym, "block": block}
+                        any_symbol_found = True
+                        inferred_symbol = sym
             except Exception:
                 pass
+
+        # Cross-file symbol search if not found in top files
+        if not any_symbol_found and inferred_symbol:
+            symbols_list = []
+            count = 0
+            for fp in files:
+                if count >= 1:
+                    break
+                if fp.suffix.lower() != ".py":
+                    continue
+                try:
+                    full = read_text_bounded(fp, max_bytes) or ""
+                    blk = _extract_python_symbol_block(full, inferred_symbol, max_lines=80)
+                    if blk:
+                        symbols_list.append({"name": inferred_symbol, "path": str(fp), "block": blk})
+                        count += 1
+                except Exception:
+                    continue
+            if symbols_list:
+                bundle_symbols = bundle.get("symbols") or []
+                bundle_symbols.extend(symbols_list)
+                bundle["symbols"] = bundle_symbols
 
     if int(merged.get("read_bytes", 0)) > 0:
         rb = int(merged.get("read_bytes", 0))

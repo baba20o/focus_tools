@@ -186,6 +186,9 @@ def run_focus_probe(plan: dict, base: Path, verbose: bool = False) -> dict:
         args += ["--read-bytes", str(int(plan.get("read_bytes", 0)))]
     if plan.get("budget_tokens"):
         args += ["--budget-tokens", str(int(plan.get("budget_tokens", 8000)))]
+    if plan.get("file_name_globs"):
+        args += ["--file-name-globs", ",".join(plan.get("file_name_globs", []))]
+        args += ["--include-all"]
 
     try:
         out = subprocess.check_output(args, stderr=subprocess.STDOUT, text=True)
@@ -236,11 +239,32 @@ def build_summary(bundle: Dict[str, Any], max_files: int = 8, snippets_per_file:
             lines.append("  URDF JOINTS:")
             for j in f.get('extracted_urdf_joints', [])[:10]:
                 lines.append(f"    - {j}")
+        if f.get('extracted_msg_nested'):
+            lines.append("  NESTED MSGS:")
+            nested = f.get('extracted_msg_nested', {})
+            for t, fields in list(nested.items())[:3]:
+                lines.append(f"    {t}:")
+                for fld in fields[:6]:
+                    lines.append(f"      - {fld}")
+        if f.get('extracted_symbol'):
+            sym = f.get('extracted_symbol', {})
+            lines.append(f"  SYMBOL {sym.get('name','')}:\n")
+            for ln in sym.get('block', [])[:12]:
+                lines.append(f"    {ln.get('line')}: {ln.get('text')}")
         for sn in (f.get("snippets") or [])[:snippets_per_file]:
             lines.append(f"  [L{sn.get('line')}]")
             for c in (sn.get("context") or [])[:4]:
                 lines.append(f"   {c.get('line')}: {c.get('text')}")
         lines.append("")
+    # Bundle-level symbols (cross-file)
+    syms = bundle.get('symbols') or []
+    if syms:
+        lines.append("SYMBOLS:")
+        for s in syms[:2]:
+            lines.append(f"- {s.get('name','')} in {s.get('path','')}")
+            for ln in s.get('block', [])[:8]:
+                lines.append(f"   {ln.get('line')}: {ln.get('text')}")
+            lines.append("")
     return "\n".join(lines)
 
 
