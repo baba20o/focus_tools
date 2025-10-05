@@ -2,6 +2,7 @@
 """
 Example: Basic test suite for focus_probe
 """
+import os
 import subprocess
 import json
 import sys
@@ -9,8 +10,9 @@ from pathlib import Path
 
 def run_probe(keyword, pattern, base, profile=None):
     """Run focus_probe and return parsed JSON"""
+    script_path = str((Path(__file__).resolve().parents[1] / "focus_probe.py").resolve())
     cmd = [
-        sys.executable, "focus_probe.py",
+        sys.executable, script_path,
         keyword, pattern,
         "-b", base,
         "--json",
@@ -27,8 +29,8 @@ def run_probe(keyword, pattern, base, profile=None):
 
 def test_basic_search():
     """Test basic directory discovery + grep"""
-    # Adjust path to your test repo
-    bundle = run_probe("spot", "teleop", "./bdai-main")
+    base = os.environ.get("FOCUS_TEST_BASE", "./bdai-main")
+    bundle = run_probe("spot", "teleop", base)
     
     assert bundle is not None, "Probe failed"
     assert bundle["dirs_found"] > 0, "No directories found"
@@ -37,7 +39,8 @@ def test_basic_search():
 
 def test_profile_usage():
     """Test profile-based search"""
-    bundle = run_probe("spot", "teleop", "./bdai-main", profile="teleop-scout")
+    base = os.environ.get("FOCUS_TEST_BASE", "./bdai-main")
+    bundle = run_probe("spot", "teleop", base, profile="teleop-scout")
     
     assert bundle is not None, "Probe with profile failed"
     assert bundle["profile"] == "teleop-scout", "Profile not applied"
@@ -47,7 +50,8 @@ def test_token_budgeting():
     """Test that results fit within token budget"""
     # Note: focus_probe doesn't have --budget-tokens in this version
     # This is a placeholder for when it's implemented
-    bundle = run_probe("spot", "teleop", "./bdai-main")
+    base = os.environ.get("FOCUS_TEST_BASE", "./bdai-main")
+    bundle = run_probe("spot", "teleop", base)
     
     if bundle and "token_estimate" in bundle:
         assert bundle["token_estimate"] < 50000, "Token estimate too high"

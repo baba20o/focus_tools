@@ -48,3 +48,4 @@ test-repos/
 results/
 output/
 *.json.bak
+.env

@@ -10,12 +10,23 @@ import sys
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import fnmatch
 
 import focus_common as fc
 
+# Optional bounded reader integration
+try:
+    import focus_read as _focus_read
+    _HAVE_FOCUS_READ = True
+except Exception:
+    _HAVE_FOCUS_READ = False
+
 # ---------------- Defaults / Guards ----------------
 
-DEFAULT_EXCLUDES_DIRS = {".git", ".hg", ".svn", ".idea", ".vscode", "node_modules", "__pycache__"}
+DEFAULT_EXCLUDES_DIRS = {
+    ".git", ".hg", ".svn", ".idea", ".vscode", "node_modules", "__pycache__",
+    "build", "dist", ".venv", "venv", ".mypy_cache", ".pytest_cache"
+}
 DEFAULT_INCLUDE_GLOBS = ["*.py", "*.md", "*.rst", "*.yaml", "*.yml", "*.launch.py", "*.txt"]
 DEFAULT_EXCLUDE_GLOBS = ["*.min.js", "*.lock", "*.bin", "*.exe", "*.dll", "*.so", "*.dylib"]
 DEFAULT_MAX_FILE_BYTES = 2_500_000
@@ -50,6 +61,23 @@ def read_text_bounded(path: Path, max_bytes: int) -> Optional[str]:
         return text[:max_bytes]
     except Exception:
         return None
+
+# ---------------- Lightweight extractors ----------------
+
+def _extract_msg_fields(text: str) -> list[str]:
+    fields: list[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith('#'):
+            continue
+        fields.append(s)
+    return fields
+
+def _extract_urdf_joints(text: str) -> list[str]:
+    # Avoid strict XML parsing to handle xacro; use regex for joint name attributes
+    import re as _re
+    names = _re.findall(r'<\s*joint[^>]*name\s*=\s*"([^"]+)"', text, flags=_re.IGNORECASE)
+    return names
 
 def grep_file(path: Path, pattern: str, regex: bool, ignore_case: bool,
               per_file_limit: int, context: int, max_file_bytes: int) -> Dict[str, Any]:
@@ -344,7 +372,13 @@ def file_score(r: Dict[str, Any], weights: Dict[str, float], pattern: str = "") 
     if pattern:
         definition_boost = detect_definition_boost(p, pattern, r.get("snippets", []))
         base_score *= definition_boost
-    
+    # Authority directory hint boost
+    parts = {s.lower() for s in p.parts}
+    if parts & {"msg", "srv", "urdf", "description", "action"}:
+        base_score *= 1.2
+    if r.get("filename_hit"):
+        base_score *= 2.0
+
     return base_score
 
 def cluster_by_prefix(paths: List[str]) -> Dict[str, List[str]]:
@@ -390,8 +424,8 @@ def main():
     # Enrichment
     ap.add_argument("--top-files", type=int, default=DEFAULT_TOP_FILES, help="Ranked top-N files to return")
     ap.add_argument("--peek", action="store_true", help="Include head/tail previews for top files")
-    ap.add_argument("--peek-head-lines", type=int, default=80, help="Head lines for peek (default 80)")
-    ap.add_argument("--peek-tail-lines", type=int, default=40, help="Tail lines for peek (default 40)")
+    ap.add_argument("--peek-head-lines", type=int, default=400, help="Head lines for peek (default 400)")
+    ap.add_argument("--peek-tail-lines", type=int, default=80, help="Tail lines for peek (default 80)")
     ap.add_argument("--read-bytes", type=int, default=0, help="Include first N bytes of top files (0=off)")
     ap.add_argument("--ascii-tree", action="store_true", help="Include a bounded ASCII tree per matched dir")
 
@@ -411,6 +445,12 @@ def main():
                     help="After JSON, also print unique directory prefixes (one per line) for top files.")
     ap.add_argument("--prefixes-only", action="store_true",
                     help="Print only unique directory prefixes (one per line) and exit (no JSON).")
+
+    # Search breadth & filename channel
+    ap.add_argument("--include-all", action="store_true", help="Do not limit by include globs (search all filetypes)")
+    ap.add_argument("--file-name-regex", action="append", help="File name regex (repeat or CSV)")
+    ap.add_argument("--file-name-globs", action="append", help="File name globs (repeat or CSV)")
+    ap.add_argument("--filename-weight", type=float, default=2.0, help="Score multiplier for filename matches")
 
     args = ap.parse_args()
 
@@ -434,6 +474,9 @@ def main():
         "not_parent": args.not_parent,
         "name_exact": args.name_exact,
         "name_regex": args.name_regex,
+        "file_name_regex": args.file_name_regexp if hasattr(args, 'file_name_regexp') else args.file_name_regex,
+        "file_name_globs": args.file_name_globs,
+        "filename_weight": args.filename_weight,
         "top_files": args.top_files,
         "peek": args.peek,
         "peek_head_lines": args.peek_head_lines,
@@ -457,6 +500,9 @@ def main():
     not_parent = fc.parse_csv_list(merged.get("not_parent"))
     name_exact = fc.parse_csv_list(merged.get("name_exact"))
     name_regex = fc.parse_csv_list(merged.get("name_regex"))
+    file_name_regex = fc.parse_csv_list(merged.get("file_name_regex"))
+    file_name_globs = fc.parse_csv_list(merged.get("file_name_globs"))
+    filename_weight = float(merged.get("filename_weight", args.filename_weight))
 
     # Debug log helper
     def log(msg: str):
@@ -477,6 +523,10 @@ def main():
         log("content-first mode: searching entire base without directory name filtering")
         dirs = bases  # Use base directories directly
         log(f"using {len(dirs)} base dir(s) in {time.time() - t0:.3f}s")
+        # In content-first mode, if user didn't explicitly provide include globs,
+        # do not limit by default (let grep consider all file types, binary guard still applies)
+        if (not args.include and not merged.get("include")) or args.include_all:
+            include_globs = []
     else:
         # Normal mode: discover directories by keyword first
         dirs = discover_dirs(
@@ -490,6 +540,8 @@ def main():
             name_regex=name_regex,
         )
         log(f"discovered {len(dirs)} dirs in {time.time() - t0:.3f}s")
+        if args.include_all:
+            include_globs = []
 
     # If only prefixes requested and no candidate dirs, exit 1 (no prefixes)
     if args.prefixes_only and not dirs:
@@ -511,6 +563,30 @@ def main():
     )
     log(f"grep hits in {time.time() - t1:.3f}s")
 
+    # Filename channel: promote files whose names match provided patterns
+    name_rx = []
+    for r in (file_name_regex or []):
+        try:
+            name_rx.append(re.compile(r, re.IGNORECASE))
+        except re.error:
+            pass
+    name_globs = file_name_globs or []
+    by_path: Dict[str, Dict[str, Any]] = {r.get("path"): r for r in grep_results if r.get("path")}
+    for p in files:
+        nm = p.name
+        matched = False
+        if name_rx and any(rx.search(nm) for rx in name_rx):
+            matched = True
+        if not matched and name_globs and any(fnmatch.fnmatch(nm, g) for g in name_globs):
+            matched = True
+        if matched:
+            key = str(p)
+            if key in by_path:
+                by_path[key]["filename_hit"] = True
+            else:
+                by_path[key] = {"path": key, "hits": 0, "snippets": [], "filename_hit": True}
+    grep_results = list(by_path.values())
+
     # Flatten & cap to total snippets limit
     total_limit = int(merged.get("total_limit", DEFAULT_TOTAL_LIMIT))
     if total_limit > 0:
@@ -521,9 +597,14 @@ def main():
 
     # Weighted scoring
     weights = {str(k): float(v) for k, v in cfg.weights.items()}
+    for k, v in {
+        ".msg": 2.0, ".idl": 1.8, ".srv": 1.6, ".urdf": 2.0, ".xacro": 2.0,
+        ".toml": 1.5, ".xml": 1.2
+    }.items():
+        weights.setdefault(k, v)
     scored = []
     for r in grep_results:
-        if r.get("hits", 0) <= 0:
+        if r.get("hits", 0) <= 0 and not r.get("filename_hit"):
             continue
         s = file_score(r, weights, pattern=args.pattern)
         scored.append((s, r))
@@ -549,17 +630,65 @@ def main():
     if merged.get("peek"):
         head_lines = int(merged.get("peek_head_lines", 80))
         tail_lines = int(merged.get("peek_tail_lines", 40))
+        max_bytes = int(merged.get("max_file_bytes", DEFAULT_MAX_FILE_BYTES))
         for r in top:
             p = Path(r["path"])
-            text = read_text_bounded(p, int(merged.get("max_file_bytes", DEFAULT_MAX_FILE_BYTES)))
-            if text:
-                lines = text.splitlines()
-                r["peek_head"] = [{"line": i+1, "text": lines[i]} for i in range(min(head_lines, len(lines)))]
-                tail = max(0, len(lines) - tail_lines)
-                r["peek_tail"] = [{"line": i+1, "text": lines[i]} for i in range(tail, len(lines))]
+            # Prefer focus_read for bounded, binary-safe peeks when available
+            if _HAVE_FOCUS_READ:
+                try:
+                    head_res = _focus_read.read_one_file(
+                        p,
+                        head=head_lines,
+                        tail=None,
+                        lines=None,
+                        max_bytes=max_bytes,
+                        skip_binary=True,
+                    )
+                    tail_res = _focus_read.read_one_file(
+                        p,
+                        head=None,
+                        tail=tail_lines,
+                        lines=None,
+                        max_bytes=max_bytes,
+                        skip_binary=True,
+                    )
+                    r["peek_head"] = [{"line": ln["line"], "text": ln["text"]} for ln in head_res.get("content", [])]
+                    r["peek_tail"] = [{"line": ln["line"], "text": ln["text"]} for ln in tail_res.get("content", [])]
+                except Exception:
+                    text = read_text_bounded(p, max_bytes)
+                    if text:
+                        lines = text.splitlines()
+                        r["peek_head"] = [{"line": i+1, "text": lines[i]} for i in range(min(head_lines, len(lines)))]
+                        tail = max(0, len(lines) - tail_lines)
+                        r["peek_tail"] = [{"line": i+1, "text": lines[i]} for i in range(tail, len(lines))]
+                else:
+                    r["peek_head"] = []
+                    r["peek_tail"] = []
             else:
-                r["peek_head"] = []
-                r["peek_tail"] = []
+                text = read_text_bounded(p, max_bytes)
+                if text:
+                    lines = text.splitlines()
+                    r["peek_head"] = [{"line": i+1, "text": lines[i]} for i in range(min(head_lines, len(lines)))]
+                    tail = max(0, len(lines) - tail_lines)
+                    r["peek_tail"] = [{"line": i+1, "text": lines[i]} for i in range(tail, len(lines))]
+                else:
+                    r["peek_head"] = []
+                    r["peek_tail"] = []
+
+            # Lightweight extraction for authority types
+            try:
+                if p.suffix.lower() == ".msg":
+                    full = read_text_bounded(p, max_bytes) or ""
+                    fields = _extract_msg_fields(full)
+                    if fields:
+                        r["extracted_msg_fields"] = fields[:50]
+                if p.suffix.lower() in {".urdf", ".xacro"}:
+                    full = read_text_bounded(p, max_bytes) or ""
+                    joints = _extract_urdf_joints(full)
+                    if joints:
+                        r["extracted_urdf_joints"] = sorted(set(joints))[:200]
+            except Exception:
+                pass
 
     if int(merged.get("read_bytes", 0)) > 0:
         rb = int(merged.get("read_bytes", 0))

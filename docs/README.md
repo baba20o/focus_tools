@@ -217,6 +217,9 @@ python focus_probe.py spot "(teleop|rviz)" \
 - Ranked top-8 files
 - Snippets with context (±2 lines)
 - Head/tail peeks (structure preview)
+- Extracted structures when available:
+  - .msg fields under `extracted_msg_fields`
+  - .urdf/.xacro joints under `extracted_urdf_joints`
 - Clusters (directory concentration)
 - Token estimate
 
@@ -249,6 +252,12 @@ python focus_grep.py "(teleop|rviz)" \
   --include "*.launch.py,*.md" \
   --json
 ```
+
+### LLM Orchestration (focus_llm)
+
+- `.env` is automatically loaded (`OPENAI_API_KEY`, `OPENAI_MODEL`, optional `OPENAI_MINI_MODEL`).
+- Set `FOCUS_USE_MINI=1` to enable mini‑LLM (classify/judge/rescore). Answer uses `OPENAI_MODEL`.
+- Add `--debug-llm` to print prompts/outputs to stderr; traces are saved by the benchmark.
 
 **Returns:** Files + snippets with line numbers
 

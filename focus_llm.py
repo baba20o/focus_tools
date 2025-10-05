@@ -51,10 +51,16 @@ def _require_env() -> Dict[str, str]:
     return {"api_key": api_key, "model": model}
 
 
-def call_openai(messages: List[Dict[str, str]], *, temperature: Optional[float] = None) -> str:
-    """Minimal OpenAI Chat Completions call. Requires OPENAI_API_KEY/MODEL.
-    Returns the assistant content as string.
-    """
+def _get_env_models() -> Dict[str, str]:
+    """Return {'main': model, 'mini': mini_model or model} from env."""
+    base = _require_env()
+    main = base["model"].strip()
+    mini = os.getenv("OPENAI_MINI_MODEL", "").strip() or main
+    return {"main": main, "mini": mini}
+
+
+def call_openai(messages: List[Dict[str, str]], *, temperature: Optional[float] = None, model: Optional[str] = None, debug: bool = False, label: str = "") -> str:
+    """Minimal OpenAI Chat Completions call. If model is None, uses OPENAI_MODEL."""
     creds = _require_env()
     try:
         from openai import OpenAI  # type: ignore
@@ -62,15 +68,28 @@ def call_openai(messages: List[Dict[str, str]], *, temperature: Optional[float] 
         raise SystemExit("Install openai>=1.0: pip install openai")
 
     client = OpenAI(api_key=creds["api_key"])  # type: ignore
-    kwargs: Dict[str, Any] = {"model": creds["model"], "messages": messages}
+    use_model = model or creds["model"]
+    kwargs: Dict[str, Any] = {"model": use_model, "messages": messages}
     # Only pass temperature if explicitly set; some models fix temperature.
     if temperature is not None:
         kwargs["temperature"] = temperature
+    if debug:
+        sys.stderr.write(f"\n=== LLM CALL [{label or 'unknown'}] model={use_model} ===\n")
+        for m in messages:
+            role = m.get("role","?")
+            sys.stderr.write(f"--- {role} ---\n{m.get('content','')}\n")
+        sys.stderr.write("=== END INPUT ===\n")
     resp = client.chat.completions.create(**kwargs)  # type: ignore
-    return resp.choices[0].message.content or ""
+    out = resp.choices[0].message.content or ""
+    if debug:
+        sys.stderr.write(f"\n=== LLM OUTPUT [{label or 'unknown'}] ===\n{out}\n=== END OUTPUT ===\n")
+    return out
 
 
 def classify(question: str, trace: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # Allow disabling mini LLM usage entirely
+    if os.getenv("FOCUS_USE_MINI", "0").strip() not in ("1", "true", "True"):
+        return _rule_based_plan(question)
     prompt = _read_prompt("classifier.txt")
     system = {
         "role": "system",
@@ -82,7 +101,9 @@ def classify(question: str, trace: Optional[Dict[str, Any]] = None) -> Dict[str,
     }
     if trace is not None:
         trace["classifier"] = {"system": prompt, "user": question}
-    raw = call_openai([system, user])
+    models = _get_env_models()
+    debug = os.getenv("FOCUS_DEBUG_LLM", "0").strip() in ("1","true","True")
+    raw = call_openai([system, user], model=models["mini"], debug=debug, label="classify")
     try:
         return json.loads(raw)
     except Exception:
@@ -96,30 +117,6 @@ def classify(question: str, trace: Optional[Dict[str, Any]] = None) -> Dict[str,
             "read_bytes": 0,
             "budget_tokens": 8000,
         }
-
-
-def read_file_heads(file_paths: list, num_lines: int = 120) -> dict:
-    """Use focus_read to get head of files for better context."""
-    if not file_paths:
-        return {"count": 0, "results": []}
-    
-    try:
-        cmd = [
-            sys.executable, "focus_read.py",
-            "--stdin-paths", "--head", str(num_lines),
-            "--json", "--quiet-missing"
-        ]
-        paths_input = "\n".join(str(p) for p in file_paths)
-        proc = subprocess.run(
-            cmd, input=paths_input, capture_output=True,
-            text=True, encoding="utf-8", timeout=30
-        )
-        if proc.returncode == 0:
-            return json.loads(proc.stdout)
-        else:
-            return {"count": 0, "results": [], "error": proc.stderr}
-    except Exception as e:
-        return {"count": 0, "results": [], "error": str(e)}
 
 
 def read_file_heads(file_paths: list, num_lines: int = 120) -> dict:
@@ -200,12 +197,17 @@ def run_focus_probe(plan: dict, base: Path, verbose: bool = False) -> dict:
 
 
 def judge(question: str, bundle_summary: str, trace: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # If mini usage is disabled, default to sufficient
+    if os.getenv("FOCUS_USE_MINI", "0").strip() not in ("1", "true", "True"):
+        return {"sufficient": True, "confidence": 0.6, "needs_followup": False, "followup": {}}
     prompt = _read_prompt("judge.txt")
     system = {"role": "system", "content": prompt}
     user = {"role": "user", "content": f"Question:\n{question}\n\nProbe Summary:\n{bundle_summary}"}
     if trace is not None:
         trace["judge"] = {"system": prompt, "user": user["content"]}
-    raw = call_openai([system, user])
+    models = _get_env_models()
+    debug = os.getenv("FOCUS_DEBUG_LLM", "0").strip() in ("1","true","True")
+    raw = call_openai([system, user], model=models["mini"], debug=debug, label="judge")
     try:
         return json.loads(raw)
     except Exception:
@@ -225,6 +227,15 @@ def build_summary(bundle: Dict[str, Any], max_files: int = 8, snippets_per_file:
     lines.append("")
     for f in bundle.get("top_files", [])[:max_files]:
         lines.append(f"FILE: {f.get('path')}  (hits={f.get('hits')})")
+        # Include extractions when available
+        if f.get('extracted_msg_fields'):
+            lines.append("  MSG FIELDS:")
+            for fld in f.get('extracted_msg_fields', [])[:10]:
+                lines.append(f"    - {fld}")
+        if f.get('extracted_urdf_joints'):
+            lines.append("  URDF JOINTS:")
+            for j in f.get('extracted_urdf_joints', [])[:10]:
+                lines.append(f"    - {j}")
         for sn in (f.get("snippets") or [])[:snippets_per_file]:
             lines.append(f"  [L{sn.get('line')}]")
             for c in (sn.get("context") or [])[:4]:
@@ -240,7 +251,38 @@ def answer(question: str, bundle: Dict[str, Any], trace: Optional[Dict[str, Any]
     user = {"role": "user", "content": f"Question:\n{question}\n\nCONTEXT:\n{ctx}"}
     if trace is not None:
         trace["answer"] = {"system": prompt, "user": user["content"]}
-    return call_openai([system, user])
+    models = _get_env_models()
+    debug = os.getenv("FOCUS_DEBUG_LLM", "0").strip() in ("1","true","True")
+    return call_openai([system, user], model=models["main"], debug=debug, label="answer")
+
+
+def mini_rescore(question: str, file_heads: dict) -> List[Dict[str, Any]]:
+    """Use a small model to rescore relevance of file heads.
+    Returns a list of {path, mini_score, type}.
+    """
+    models = _get_env_models()
+    out: List[Dict[str, Any]] = []
+    for f in file_heads.get("results", []):
+        if f.get("error"):
+            continue
+        path = f.get("path", "")
+        lines = f.get("content", [])
+        head_text = "\n".join(ln.get("text", "") for ln in lines[:50])
+        system = {"role": "system", "content": "Rank file relevance for answering the question. JSON only."}
+        content = (
+            'Return strict JSON: {"score": 0.0-1.0, "type": "definitive|mentions|unrelated"}.\n'
+            f"Question: {question}\nFile: {path}\nPreview:\n{head_text}"
+        )
+        user = {"role": "user", "content": content}
+        try:
+            raw = call_openai([system, user], model=models["mini"], temperature=0.0, debug=os.getenv("FOCUS_DEBUG_LLM","0").strip() in ("1","true","True"), label="rescore")
+            data = json.loads(raw)
+            score = float(data.get("score", 0.0))
+            typ = str(data.get("type", "unknown"))
+            out.append({"path": path, "mini_score": score, "type": typ})
+        except Exception as e:
+            out.append({"path": path, "mini_score": 0.5, "type": "error", "error": str(e)})
+    return out
 
 
 def _rule_based_plan(question: str) -> Dict[str, Any]:
@@ -297,6 +339,7 @@ def main(argv: List[str]) -> int:
     dry = "--dry-run" in argv
     # Optional verbose mode to print intermediate steps
     verbose = "--verbose" in argv
+    debug_llm = "--debug-llm" in argv
     # Optional trace dump
     trace_out: Optional[str] = None
     if "--trace-out" in argv:
@@ -306,6 +349,9 @@ def main(argv: List[str]) -> int:
         except Exception:
             trace_out = None
     trace: Dict[str, Any] = {}
+    # propagate debug to child calls via env flag
+    if debug_llm:
+        os.environ["FOCUS_DEBUG_LLM"] = "1"
 
     # 1) classify or rule-based
     if verbose:
@@ -335,6 +381,25 @@ def main(argv: List[str]) -> int:
             print("\nTop 3 files:", file=sys.stderr)
             for f in bundle1.get('top_files', [])[:3]:
                 print(f"  - {f.get('path')} (hits={f.get('hits')})", file=sys.stderr)
+
+    # 2b) Optional mini-LLM rescoring (disabled unless FOCUS_USE_MINI=1)
+    if os.getenv("FOCUS_USE_MINI", "0").strip() in ("1", "true", "True"):
+        top_paths = [f.get("path") for f in bundle1.get("top_files", []) if f.get("path")]
+        if top_paths:
+            heads = read_file_heads(top_paths, num_lines=120)
+            rescored = mini_rescore(question, heads)
+            if trace is not None:
+                trace["rescore"] = rescored
+            # Combine probe rank with mini score: 60/40 weighting
+            rank_n = len(top_paths)
+            probe_rank: Dict[str, float] = {}
+            for idx, p in enumerate(top_paths, start=1):
+                probe_rank[p] = 1.0 - (idx - 1) / max(1, rank_n)
+            mini_map = {e["path"]: float(e.get("mini_score", 0.5)) for e in rescored}
+            def final_score(entry: Dict[str, Any]) -> float:
+                p = entry.get("path", "")
+                return 0.6 * probe_rank.get(p, 0.5) + 0.4 * mini_map.get(p, 0.5)
+            bundle1["top_files"] = sorted(bundle1.get("top_files", []), key=final_score, reverse=True)
     
     # 3) judge
     summary1 = build_summary(bundle1)

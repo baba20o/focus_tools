@@ -5,13 +5,28 @@ from pathlib import Path
 from typing import List, Dict, Iterable, Iterator, Tuple
 import os, sys, re, argparse, json, fnmatch
 
-DEFAULT_EXCLUDES_DIR = {".git", ".hg", ".svn", ".idea", ".vscode", "node_modules", "__pycache__"}
-DEFAULT_INCLUDE_GLOBS = ["*.py", "*.pyw", "*.md", "*.rst", "*.yaml", "*.yml", "*.launch.py", "*.txt"]
+DEFAULT_EXCLUDES_DIR = {
+    ".git", ".hg", ".svn", ".idea", ".vscode", "node_modules", "__pycache__",
+    "build", "dist", ".venv", "venv", ".mypy_cache", ".pytest_cache"
+}
+# Broaden defaults to include common ROS/robot and config/doc types
+DEFAULT_INCLUDE_GLOBS = [
+    "*.py", "*.pyw", "*.md", "*.rst", "*.yaml", "*.yml", "*.toml", "*.json",
+    "*.launch.py", "*.xml", "*.msg", "*.idl", "*.srv", "*.action", "*.urdf", "*.xacro",
+    "CMakeLists.txt", "Dockerfile*", "*.txt"
+]
 DEFAULT_EXCLUDE_GLOBS = ["*.min.js", "*.lock", "*.bin", "*.exe", "*.dll", "*.so", "*.dylib"]
 DEFAULT_MAX_FILE_BYTES = 2_500_000  # ~2.5MB cap per file
 DEFAULT_MAX_HITS_PER_FILE = 20
 DEFAULT_MAX_TOTAL_HITS = 500
 DEFAULT_CONTEXT = 2
+
+# Extensions that should always be treated as text (bypass binary heuristics)
+TEXT_EXTENSIONS = {
+    ".py", ".pyw", ".md", ".rst", ".yaml", ".yml", ".toml", ".json", ".txt",
+    ".msg", ".idl", ".srv", ".action", ".urdf", ".xacro", ".launch", ".xml",
+    ".c", ".cc", ".cpp", ".h", ".hpp", ".cmake"
+}
 
 def is_probably_binary(data: bytes) -> bool:
     # quick heuristic
@@ -48,10 +63,15 @@ def read_text_safely(p: Path, max_bytes: int) -> str | None:
     try:
         with open(p, "rb") as fh:
             buf = fh.read(max_bytes + 1)
-        if len(buf) > max_bytes:
-            # still OK; we search within capped bytes
-            pass
-        if is_probably_binary(buf):
+        # Treat known texty files as text regardless of heuristic
+        name = p.name
+        suffix = p.suffix.lower()
+        force_text = (
+            suffix in TEXT_EXTENSIONS
+            or name == "CMakeLists.txt"
+            or name.startswith("Dockerfile")
+        )
+        if not force_text and is_probably_binary(buf):
             return None
         return buf[:max_bytes].decode("utf-8", errors="ignore")
     except Exception:

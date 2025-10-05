@@ -30,6 +30,8 @@ python focus_probe.py KEYWORD PATTERN -b BASE [-b BASE ...]
   [--max-file-bytes N] [--top-files N]
   [--ascii-tree] [--tree-depth N] [--tree-limit N]
   [--peek] [--read-bytes N]
+  [--content-first] [--include-all]
+  [--file-name-regex REGEX ...] [--file-name-globs CSV] [--filename-weight X]
   [--json]
   [--emit-path-prefixes] [--prefixes-only]
 
@@ -58,6 +60,18 @@ Grep control:
 --include "*.py,*.launch.py,*.md", --exclude "*.min.js,*.lock"
 
 --context 3, --per-file-snippets 6, --total-snippets 300
+
+Breadth and authority:
+
+--content-first           Search entire base(s) without directory-name gate (cluster after)
+
+--include-all             Do not limit by include globs (search all file types)
+
+--file-name-regex         Promote files whose NAMES match (authority channel)
+
+--file-name-globs         Promote files whose NAMES match globs (e.g., robot_actions.py)
+
+--filename-weight X       Multiplier applied to filename matches (default 2.0)
 
 Output:
 
@@ -105,15 +119,17 @@ Output format (JSON)
   "filters": { "...": "..." },
   "dirs_found": 7,
   "trees": { "...": "ASCII tree if requested" },
-  "hits_total_snippets": 42,
-  "files_with_hits": 15,
-  "top_files": [
-    {
-      "path": "C:/tests/bdai-main/ws/src/.../spot_rviz_teleop.launch.py",
-      "dir": "C:/tests/bdai-main/ws/src/.../spot_utilities/launch",
-      "hits": 3,
-      "snippets": [{ "line": 42, "start": 40, "end": 44, "context": [ ... ] }],
+ "hits_total_snippets": 42,
+ "files_with_hits": 15,
+ "top_files": [
+   {
+     "path": "C:/tests/bdai-main/ws/src/.../spot_rviz_teleop.launch.py",
+     "dir": "C:/tests/bdai-main/ws/src/.../spot_utilities/launch",
+     "hits": 3,
+     "snippets": [{ "line": 42, "start": 40, "end": 44, "context": [ ... ] }],
       "peek": { "head": [...], "tail": [...], "total_lines": 120 }    // if --peek
+      "extracted_msg_fields": ["std_msgs/Header header", "float32 time_step", ...], // if .msg
+      "extracted_urdf_joints": ["RJ1","RJ2", ...],                                 // if .urdf/.xacro
       // "read": "..."                                                // if --read-bytes > 0
     }
   ],
@@ -138,3 +154,7 @@ Keep --top-files modest (8–12) and use --path_prefixes to scope your RAG.
 For the LLM: give it a short “tool card” explaining the knobs it can tune.
 
 Pair with your RAG path filter: pass path_prefixes as path_prefixes=[...] to force focused retrieval.
+
+Peek defaults
+
+- Head: 400 lines, Tail: 80 lines by default (configurable). Peeks are powered by focus_read for bounded, binary‑safe reads.

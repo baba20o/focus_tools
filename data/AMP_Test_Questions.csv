@@ -1,0 +1,25 @@
+question,expected_answer
+What does AMP Stand for?,Agile Manipulation Platform
+"What are the contents of a MultiJointTraj, show the contents of nested messages as well","The message contains:
+	1. std_msgs/Header header
+	2. float32 time_step
+	3. SingleJointTraj[] joint_trajectories
+		1. string name
+		2. float64[] positions
+		3. float64[] velocities
+		4. float64[] accelerations
+		5. float64[] effort
+		6. float64[] p_gains
+		7. float64[] d_gains"
+What are the available joints on alpha?,"Torso: TJ1,
+Right Arm: RJ1 - RJ7, RH1,
+Left Arm: LJ1 - LJ7, LH1"
+What does commander.wave() do?,"It moves Alpha to a ""wave"" pose, oscillates the wrist/forearm joints twice, then returns home. Default timing is 1.0s per segment."
+"When running the robot, I encountered an ethercat connectivity issues (timeout). What solutions exist?",There may be an ethercat permissions issues that can be resolved by running `ros2 run copley_driver check_and_set_ethercat_capabilities.sh`
+How do i add a new python package to the project?,"1. Edit pyproject.toml in projects/amp/pyproject.toml and add the new dependency
+2. If it needs system libs, add apt packages to the AMP Dockerfiles (projects/amp/docker/Dockerfile.x86 and Dockerfile.arm64) or the base image config, then rebuild the container.
+3. Update the lock file so that the requirements are baked into the docker image via `bdai lock amp --skip-top-level-project`"
+Which physics simulator does alpha simulator use?,Alpha Simulator uses drake to simulate physics
+What is the copley_driver?,It's the ROS2 driver that talks to Copley motor drives over EtherCAT. It subscribes to ~/motor_commands (AMPJointCommandV2) and publishes ~/actuator_states (amp_common/ActuatorStates) or ~/motor_states (sensor_msgs/JointState)
+Where can I add a new robot action,Add it in projects/amp/ws/src/alpha_orchestrator/alpha_orchestrator/utils/robot_actions.py
+How does the inverse dynamics ff controller calculate torques?,"The controller builds a Pinocchio model from the URDF, uses current joint positions/velocities (q, v) and desired accelerations (a), then computes feed‑forward torques via RNEA: τ = rnea(model, data, q, v, a). The torques are remapped to the controller's joint order and overwrite the effort field; if inverse dynamics is disabled, the input efforts pass through."

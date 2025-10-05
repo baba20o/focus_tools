@@ -599,6 +599,23 @@ def run_benchmark():
 This is a research/internal tool. For questions or collaboration:
 - Review the individual tool READMEs
 - Check the examples in each file
+
+---
+
+## ♻️ Recent Retrieval Enhancements
+
+- Filename channel: focus_probe can promote candidate files by name using --file-name-regex/--file-name-globs with a configurable --filename-weight. This surfaces canonical targets (e.g., robot_actions.py, pyproject.toml) even when content matches are sparse.
+- Include-all breadth: --include-all disables include globs in both content-first and normal modes, ensuring discovery breadth when needed.
+- Authority weighting: default (mergeable) boosts for .msg/.idl/.srv/.urdf/.xacro/.toml/.xml and authority dirs (msg/srv/urdf/description/action).
+- Structured extractors: peeks now include lightweight extractions when applicable:
+  - .msg → extracted_msg_fields
+  - .urdf/.xacro → extracted_urdf_joints
+  These appear in the bundle/answer summary to guide LLMs without extra tokens.
+
+## 🧪 Mini‑LLM Switch & Debugging
+
+- Mini switch: Set FOCUS_USE_MINI=1 to enable mini‑LLM for classify/judge/rescoring; answer uses OPENAI_MODEL. With it off (default), classify is rule‑based and judge assumes sufficient.
+- Debugging: pass --debug-llm to focus_llm (or set FOCUS_DEBUG_LLM=1) to print prompts/outputs to stderr. Traces are still written to results/traces/ when running via the benchmark.
 - Run with `--debug` for troubleshooting
 
 ---

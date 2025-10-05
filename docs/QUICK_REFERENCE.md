@@ -206,3 +206,37 @@ python focus_grep.py --help        # Content search
 ---
 
 **Happy Hunting! 🎯🔫**
+# Quick Reference
+
+## Common Commands
+
+- Probe (content-first, broad):
+  - `python focus_probe.py amp "(teleop|rviz)" -b ./repo --content-first --json --top-files 8 --peek`
+
+- Include all filetypes (no include globs):
+  - `python focus_probe.py docs guide -b ./repo --include-all --json`
+
+- Filename authority channel:
+  - `python focus_probe.py alpha . -b ./repo --content-first --file-name-globs robot_actions.py --json`
+
+- Peeks (defaults head=400, tail=80):
+  - `python focus_probe.py alpha wave -b ./repo --peek --json`
+
+- Focus read (bounded lines/range):
+  - `python focus_read.py file.py --head 200 --json`
+
+- Benchmark (env from .env):
+  - `python scripts/benchmark.py -b C:\\path\\to\\repo --csv data/AMP_Test_Questions.csv --auto-grade --trace-dir results/traces --llm-verbose`
+  - Add `--llm-debug` to print prompts/outputs.
+
+## Switches & Env
+
+- `FOCUS_USE_MINI=1` → enable mini‑LLM for classify/judge/rescore; answer uses `OPENAI_MODEL`.
+- `FOCUS_DEBUG_LLM=1` → print LLM prompts/outputs to stderr (also available via `--debug-llm`).
+- `.env` keys: `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_MINI_MODEL`.
+
+## New Flags (focus_probe)
+
+- `--include-all` → disable include globs.
+- `--file-name-regex`, `--file-name-globs` → promote files by name.
+- `--filename-weight` → multiplier for filename matches.

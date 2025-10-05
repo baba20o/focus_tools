@@ -7,7 +7,10 @@ import sys
 import argparse
 
 # --- Config knobs (tweak freely) ---
-DEFAULT_EXCLUDES = {".git", ".hg", ".svn", ".idea", ".vscode", "node_modules", "__pycache__"}
+DEFAULT_EXCLUDES = {
+    ".git", ".hg", ".svn", ".idea", ".vscode", "node_modules", "__pycache__",
+    "build", "dist", ".venv", "venv", ".mypy_cache", ".pytest_cache"
+}
 DEFAULT_MAX_DEPTH = 2
 DEFAULT_MAX_ENTRIES = 200
 

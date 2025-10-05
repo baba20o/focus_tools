@@ -36,6 +36,8 @@ python focus_read.py file.py --lines :100
 python focus_read.py README.md --head 40 --tail 30
 ```
 
+Note: focus_probe uses focus_read for peeks. Default peek sizes are head=400 lines and tail=80 lines (overridable via --peek-head-lines/--peek-tail-lines).
+
 ### JSON Output
 
 ```bash
@@ -72,7 +74,7 @@ Output structure:
 ```bash
 # Pipe from focus_probe
 python focus_probe.py amp "AMP" -b ./repo --content-first --json | \
-  jq -r '.top_files[].[].path' | \
+  jq -r '.top_files[].path' | \
   python focus_read.py --stdin-paths --head 120 --json
 
 # Pipe from find
