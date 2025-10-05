@@ -49,3 +49,6 @@ results/
 output/
 *.json.bak
 .env
+
+# Ignore external RAG engine repo
+EIS_CHATBOT/
