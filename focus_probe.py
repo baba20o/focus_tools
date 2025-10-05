@@ -197,13 +197,24 @@ def discover_dirs(keyword: str,
 
 def iter_files_under_dirs(dirs: List[Path],
                           include_globs: List[str],
-                          exclude_globs: List[str]) -> List[Path]:
+                          exclude_globs: List[str],
+                          not_parent: List[str] = None) -> List[Path]:
     files: List[Path] = []
+    not_parent_norm = {fc.normalize(x) for x in (not_parent or [])}
+    
     for d in dirs:
         if not d.exists():
             continue
         for root, subdirs, fs in os.walk(d):
             subdirs[:] = [x for x in subdirs if fc.normalize(x) not in {fc.normalize(y) for y in DEFAULT_EXCLUDES_DIRS}]
+            
+            # Apply not_parent filter to path components
+            if not_parent_norm:
+                root_path = Path(root)
+                parts_norm = {fc.normalize(p) for p in root_path.parts}
+                if parts_norm & not_parent_norm:  # Intersection = has excluded parent
+                    continue
+            
             for f in fs:
                 p = Path(root) / f
                 name = p.name
@@ -241,10 +252,100 @@ def grep_files_parallel(files: List[Path],
 
 # ---------------- Scoring / Clustering ----------------
 
-def file_score(r: Dict[str, Any], weights: Dict[str, float]) -> float:
+def _suffix_weight(path: Path, weights: Dict[str, float]) -> float:
+    """Return the best weight for a path based on suffix keys.
+    Supports multi-suffix keys like '.launch.py' by picking the longest
+    matching key that the filename ends with. Falls back to last suffix.
+    """
+    name = path.name.lower()
+    best_w = 1.0
+    best_len = 0
+    for k, v in weights.items():
+        ks = str(k).lower().strip()
+        if not ks:
+            continue
+        if name.endswith(ks) and len(ks) > best_len:
+            best_len = len(ks)
+            try:
+                best_w = float(v)
+            except Exception:
+                best_w = 1.0
+    if best_len > 0:
+        return best_w
+    # Fallback to simple last suffix
+    return float(weights.get(path.suffix, 1.0))
+
+def detect_definition_boost(file_path: Path, pattern: str, snippets: List[Dict[str, Any]]) -> float:
+    """Boost score if file appears to DEFINE the keyword (not just mention it).
+    
+    Looks for:
+    - Root README.md in project directory matching keyword (projects/amp/README.md)
+    - H1 headers (any H1 in a root README is likely a definition)
+    - "Keyword stands for" patterns
+    - Definition lines ("Keyword: explanation" or "Keyword — explanation")
+    
+    Returns boost multiplier (1.0 = no boost, 5.0 = strong definition signal)
+    """
+    import re
+    
+    boost = 1.0
+    
+    # Extract keyword from pattern (remove regex chars if needed)
+    # For simple cases, use the pattern as-is; for regex, extract first word group
+    keyword = pattern.lower()
+    if '|' in pattern or '(' in pattern or '[' in pattern:
+        # Try to extract first meaningful word
+        match = re.search(r'\w{3,}', pattern)
+        if match:
+            keyword = match.group(0).lower()
+    
+    # Build a sample of content from snippets
+    content_sample = "\n".join([s.get("text", "") for s in snippets[:10]])
+    
+    # **STRONGEST SIGNAL**: README.md in a directory matching the keyword
+    # e.g., projects/amp/README.md when searching for "amp"
+    if file_path.name.lower() == "readme.md":
+        parts = [p.lower() for p in file_path.parts]
+        # Check if keyword appears in the path (projects/amp, robots/spot, etc.)
+        if keyword in parts:
+            # Find index of keyword and check if README is in that directory or one level down
+            try:
+                kw_idx = parts.index(keyword)
+                # If README is at projects/amp/README.md (keyword at -2)
+                if len(parts) >= 2 and parts[-2] == keyword:
+                    boost = 8.0  # VERY strong signal - root project README
+                # Or if it's one level deeper like projects/amp/docs/README.md
+                elif kw_idx >= 0 and kw_idx < len(parts) - 1:
+                    boost = 2.0  # Mild boost for sub-directories
+            except ValueError:
+                pass
+    
+    # Check for definition patterns in content
+    # H1 header (any H1 is a definition candidate)
+    if re.search(r"^#\s+\w+", content_sample, re.M):
+        boost = max(boost, 2.5)  # Boost if we found an H1
+    
+    # "X stands for Y" pattern
+    if re.search(rf"\b{re.escape(keyword)}\b\s+stands\s+for", content_sample, re.I):
+        boost = max(boost, 3.5)
+    
+    # Definition line: "KEYWORD: " or "KEYWORD — "
+    if re.search(rf"^{re.escape(keyword)}\s*[-:—]", content_sample, re.M | re.I):
+        boost = max(boost, 3.0)
+    
+    return boost
+
+def file_score(r: Dict[str, Any], weights: Dict[str, float], pattern: str = "") -> float:
     p = Path(r["path"])
-    w = weights.get(p.suffix, 1.0)
-    return r["hits"] * w + 0.1 * len(r.get("snippets", []))
+    w = _suffix_weight(p, weights)
+    base_score = r["hits"] * w + 0.1 * len(r.get("snippets", []))
+    
+    # Apply definition boost if pattern is provided
+    if pattern:
+        definition_boost = detect_definition_boost(p, pattern, r.get("snippets", []))
+        base_score *= definition_boost
+    
+    return base_score
 
 def cluster_by_prefix(paths: List[str]) -> Dict[str, List[str]]:
     return fc.common_prefix_components([Path(p) for p in paths])
@@ -268,6 +369,9 @@ def main():
                     help="Additional directory names to skip (repeatable)")
 
     # Discovery filters
+    ap.add_argument("--content-first", action="store_true",
+                    help="Skip directory name matching; search entire base for pattern first, then cluster results. "
+                         "More comprehensive but slower. Recommended for queries where keyword != directory name.")
     ap.add_argument("--must-parent", action="append", help="ANY of these parent path components")
     ap.add_argument("--must-parent-all", action="append", help="ALL of these parent path components")
     ap.add_argument("--not-parent", action="append", help="NONE of these parent path components")
@@ -301,6 +405,12 @@ def main():
     ap.add_argument("--output", help="Write JSON to file")
     ap.add_argument("--debug", action="store_true", help="Verbose debug logging to stderr")
     ap.add_argument("--no-color", action="store_true", help="Disable ANSI colors in human output")
+
+    # Path prefixes (for RAG scoping)
+    ap.add_argument("--emit-path-prefixes", action="store_true",
+                    help="After JSON, also print unique directory prefixes (one per line) for top files.")
+    ap.add_argument("--prefixes-only", action="store_true",
+                    help="Print only unique directory prefixes (one per line) and exit (no JSON).")
 
     args = ap.parse_args()
 
@@ -361,19 +471,31 @@ def main():
             sys.stderr.write(f"  - {m}\n")
 
     t0 = time.time()
-    dirs = discover_dirs(
-        keyword=args.keyword,
-        bases=bases,
-        aliases=cfg.aliases,
-        must_parent_any=must_parent_any,
-        must_parent_all=must_parent_all,
-        not_parent=not_parent,
-        name_exact=name_exact,
-        name_regex=name_regex,
-    )
-    log(f"discovered {len(dirs)} dirs in {time.time() - t0:.3f}s")
+    
+    # Content-first mode: skip directory discovery, search entire base
+    if args.content_first:
+        log("content-first mode: searching entire base without directory name filtering")
+        dirs = bases  # Use base directories directly
+        log(f"using {len(dirs)} base dir(s) in {time.time() - t0:.3f}s")
+    else:
+        # Normal mode: discover directories by keyword first
+        dirs = discover_dirs(
+            keyword=args.keyword,
+            bases=bases,
+            aliases=cfg.aliases,
+            must_parent_any=must_parent_any,
+            must_parent_all=must_parent_all,
+            not_parent=not_parent,
+            name_exact=name_exact,
+            name_regex=name_regex,
+        )
+        log(f"discovered {len(dirs)} dirs in {time.time() - t0:.3f}s")
 
-    files = iter_files_under_dirs(dirs, include_globs, exclude_globs)
+    # If only prefixes requested and no candidate dirs, exit 1 (no prefixes)
+    if args.prefixes_only and not dirs:
+        return 1
+
+    files = iter_files_under_dirs(dirs, include_globs, exclude_globs, not_parent=not_parent)
     log(f"candidate files: {len(files)}")
 
     t1 = time.time()
@@ -403,12 +525,25 @@ def main():
     for r in grep_results:
         if r.get("hits", 0) <= 0:
             continue
-        s = file_score(r, weights)
+        s = file_score(r, weights, pattern=args.pattern)
         scored.append((s, r))
     scored.sort(key=lambda x: x[0], reverse=True)
 
     top_n = int(merged.get("top_files", DEFAULT_TOP_FILES))
     top = [r for _s, r in scored[:top_n]]
+
+    # Compute unique path prefixes from top files
+    def _path_prefixes(entries: List[Dict[str, Any]]) -> List[str]:
+        uniq = sorted({str(Path(e.get("path", "")).expanduser().resolve().parent)
+                       for e in entries if e.get("path")}, key=str.lower)
+        return uniq
+    prefixes = _path_prefixes(top)
+
+    # prefixes-only mode: print one-per-line and exit (0 if any, else 1)
+    if args.prefixes_only:
+        for p in prefixes:
+            print(p)
+        return 0 if prefixes else 1
 
     # Enrichment: peek & bounded read
     if merged.get("peek"):
@@ -448,6 +583,19 @@ def main():
         "regex": bool(merged.get("regex", False)),
         "case_insensitive": bool(merged.get("ignore_case", False)),
         "bases": [str(b) for b in bases],
+        "filters": {
+            "must_parent_any": must_parent_any,
+            "must_parent_all": must_parent_all,
+            "not_parent": not_parent,
+            "name_exact": name_exact,
+            "name_regex": name_regex,
+            "include_globs": include_globs,
+            "exclude_globs": exclude_globs,
+            # Effective directory excludes: built-ins plus any user-provided extras
+            "exclude_dirs": sorted({*{str(x) for x in DEFAULT_EXCLUDES_DIRS}, *{
+                y.strip() for chunk in (args.exclude_dirs or []) for y in str(chunk).split(',') if y.strip()
+            }}, key=str.lower),
+        },
         "dirs_found": len(dirs),
         "files_scanned": len(files),
         "files_with_hits": len(grep_results),
@@ -457,11 +605,19 @@ def main():
         "trees": trees,
         "weights": weights,
         "profile": args.profile or "",
+        "path_prefixes": prefixes,
     }
 
     # Token budget guard (approx)
     if int(args.budget_tokens or 0) > 0:
         bundle = fc.trim_bundle_to_token_budget(bundle, int(args.budget_tokens))
+
+    # Attach a rough token estimate for downstream consumers
+    try:
+        bundle["token_estimate"] = fc.estimate_tokens_from_json(bundle)
+    except Exception:
+        # Best-effort only; omit on failure
+        pass
 
     # Output
     if args.json or args.output:
@@ -470,6 +626,10 @@ def main():
             Path(args.output).write_text(data, encoding="utf-8")
         if args.json:
             print(data)
+        # Optionally emit plain prefixes after JSON
+        if args.emit_path_prefixes and prefixes:
+            for p in prefixes:
+                print(p)
     else:
         # Human summary
         use_color = fc.is_tty() and not args.no_color
@@ -484,6 +644,10 @@ def main():
             for k, v in trees.items():
                 print(fc.colorize(f"\n{k}", fc.Ansi.YELLOW, enable=use_color))
                 print(v)
+        # Optionally emit plain prefixes after summary
+        if args.emit_path_prefixes and prefixes:
+            for p in prefixes:
+                print(p)
 
     # Exit code: success even if zero hits (valid run)
     return 0
