@@ -1,0 +1,10 @@
+{
+  "definition": { "allow_rag": false },
+  "schema": { "allow_rag": false },
+  "config": { "allow_rag": true, "source_types": ["code", "github_docs"] },
+  "symbol": { "allow_rag": true, "source_types": ["code", "github_docs"] },
+  "troubleshooting": { "allow_rag": true, "source_types": ["github_docs", "notion", "code"] },
+  "docs_guidelines": { "allow_rag": true, "source_types": ["github_docs", "notion"] },
+  "general": { "allow_rag": true, "source_types": ["github_docs", "code"] }
+}
+

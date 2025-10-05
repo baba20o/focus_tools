@@ -143,7 +143,7 @@ def read_file_heads(file_paths: list, num_lines: int = 120) -> dict:
         return {"count": 0, "results": [], "error": str(e)}
 
 
-def run_focus_probe(plan: dict, base: Path, verbose: bool = False) -> dict:
+def run_focus_probe(plan: dict, bases: List[Path], verbose: bool = False) -> dict:
     """Run focus_probe with the classified plan."""
     keyword = plan.get("keyword") or ""
     if not keyword:
@@ -157,10 +157,10 @@ def run_focus_probe(plan: dict, base: Path, verbose: bool = False) -> dict:
         str(Path(__file__).parent / "focus_probe.py"),
         str(keyword),
         str(pattern),
-        "-b",
-        str(base),
         "--json",
     ]
+    for b in bases:
+        args += ["-b", str(b)]
 
     if plan.get("profile"):
         args += ["--profile", str(plan["profile"])]
@@ -265,7 +265,47 @@ def build_summary(bundle: Dict[str, Any], max_files: int = 8, snippets_per_file:
             for ln in s.get('block', [])[:8]:
                 lines.append(f"   {ln.get('line')}: {ln.get('text')}")
             lines.append("")
+    # Optional RAG chunks (scoped semantic retrieval)
+    rchunks = bundle.get('rag_chunks') or []
+    if rchunks:
+        lines.append("RAG CHUNKS:")
+        for c in rchunks[:3]:
+            url = c.get('url', '')
+            text = (c.get('text', '') or '')[:240].replace('\n', ' ')
+            score = c.get('score')
+            lines.append(f"- {url}  (score={score})")
+            if text:
+                lines.append(f"  {text}")
+        lines.append("")
     return "\n".join(lines)
+
+
+def _infer_category(question: str) -> str:
+    q = (question or "").lower()
+    if any(k in q for k in ["stand for", "acronym", "definition", "what is"]):
+        return "definition"
+    if any(k in q for k in ["message", "msg", "srv", "idl", "fields"]):
+        return "schema"
+    if any(k in q for k in ["config", "parameter", "launch", "pyproject", "dockerfile", "toml"]):
+        return "config"
+    if any(k in q for k in ["wave()", "function", "symbol", "how does", "calculate", "controller"]):
+        return "symbol"
+    if any(k in q for k in ["troubleshoot", "error", "timeout", "deadlock", "issue", "not working", "puzzling"]):
+        return "troubleshooting"
+    if any(k in q for k in ["best practice", "how to", "guidelines", "examples"]):
+        return "docs_guidelines"
+    return "general"
+
+
+def _load_router_policy() -> Dict[str, Any]:
+    # Optional JSON policy
+    for cand in [Path("docs/router_policy.json"), Path("router_policy.json")]:
+        if cand.exists():
+            try:
+                return json.loads(cand.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+    return {}
 
 
 def answer(question: str, bundle: Dict[str, Any], trace: Optional[Dict[str, Any]] = None) -> str:
@@ -369,16 +409,36 @@ def main(argv: List[str]) -> int:
         q_tokens.append(tok)
         i += 1
     question = " ".join(q_tokens).strip() or (argv[1] if len(argv) > 1 else "")
-    try:
-        bidx = argv.index("-b")
-        base = Path(argv[bidx + 1]).expanduser().resolve()
-    except ValueError:
-        base = Path(".").resolve()
+    # Collect all base paths (repeatable -b)
+    bases: List[Path] = []
+    i2 = 1
+    while i2 < len(argv):
+        if argv[i2] == "-b" and (i2 + 1) < len(argv):
+            bases.append(Path(argv[i2 + 1]).expanduser().resolve())
+            i2 += 2
+        else:
+            i2 += 1
+    if not bases:
+        bases = [Path(".").resolve()]
 
     # Optional dry-run mode to print payloads without calling LLM
     dry = "--dry-run" in argv
     # Optional verbose mode to print intermediate steps
     verbose = "--verbose" in argv
+    allow_rag_flag = "--allow-rag" in argv
+    # Optional router overrides
+    router_mode_cli: Optional[str] = None
+    rag_sources_cli: Optional[List[str]] = None
+    if "--router-mode" in argv:
+        try:
+            router_mode_cli = argv[argv.index("--router-mode") + 1].strip()
+        except Exception:
+            router_mode_cli = None
+    if "--rag-sources" in argv:
+        try:
+            rag_sources_cli = [s.strip() for s in argv[argv.index("--rag-sources") + 1].split(",") if s.strip()]
+        except Exception:
+            rag_sources_cli = None
     debug_llm = "--debug-llm" in argv
     # Optional trace dump
     trace_out: Optional[str] = None
@@ -410,7 +470,7 @@ def main(argv: List[str]) -> int:
         print("\n" + "="*80, file=sys.stderr)
         print("STEP 2: PROBE", file=sys.stderr)
         print("="*80, file=sys.stderr)
-    bundle1 = run_focus_probe(plan1, base)
+    bundle1 = run_focus_probe(plan1, bases)
     if "error" in bundle1:
         print(json.dumps(bundle1, indent=2))
         return 1
@@ -511,7 +571,7 @@ def main(argv: List[str]) -> int:
     if verbose:
         print(f"Refined plan: {json.dumps(plan1, indent=2)}", file=sys.stderr)
 
-    bundle2 = run_focus_probe(plan1, base)
+    bundle2 = run_focus_probe(plan1, bases)
     
     # Choose best of initial vs follow-up bundles to avoid regressions
     def _bundle_score(b: Dict[str, Any]) -> float:
@@ -535,6 +595,53 @@ def main(argv: List[str]) -> int:
         return fwh + 0.3*auth_count + 0.2*extracted_bonus + 0.05*len(tf)
 
     better = bundle2 if _bundle_score(bundle2) >= _bundle_score(bundle1) else bundle1
+
+    # Optional scoped RAG fallback (import-based adapter), guarded by env/flag and router policy
+    allow_rag_env = os.getenv("ALLOW_RAG", "0").strip() in ("1", "true", "True")
+    policy = _load_router_policy()
+    category = _infer_category(question)
+    pol = policy.get(category, {}) if isinstance(policy, dict) else {}
+    pol_allow = bool(pol.get("allow_rag", False))
+    pol_sources = pol.get("source_types") if isinstance(pol.get("source_types"), list) else None
+    router_mode = (router_mode_cli or pol.get("router_mode") or "auto").lower()
+    if rag_sources_cli:
+        pol_sources = rag_sources_cli
+        pol_allow = True
+    if verbose:
+        print(f"Router category: {category}; mode={router_mode}; policy_allow={pol_allow}; sources={pol_sources}", file=sys.stderr)
+    allow_by_mode = (
+        (router_mode == "policy" and pol_allow) or
+        (router_mode == "router" and True) or
+        (router_mode == "auto" and (pol_allow or category in ("troubleshooting", "docs_guidelines")))
+    )
+    if (allow_rag_env or allow_rag_flag) and allow_by_mode:
+        try:
+            from focus_rag_adapter import rag_search  # type: ignore
+            # Heuristic trigger: escalate when focus evidence is weak, or low authority for tricky categories
+            fwh = int(better.get("files_with_hits", 0) or 0)
+            tf = better.get("top_files") or []
+            auth_ext = {'.msg', '.idl', '.srv', '.urdf', '.xacro', '.launch.py'}
+            auth_count = 0
+            extract_signals = 0
+            for f in tf:
+                p = str(f.get('path','')).lower()
+                if any(p.endswith(ext) for ext in auth_ext):
+                    auth_count += 1
+                if f.get('extracted_msg_fields') or f.get('extracted_urdf_joints') or f.get('extracted_symbol'):
+                    extract_signals += 1
+            weak_focus = fwh < 3
+            low_auth_for_help = (category in ("troubleshooting","docs_guidelines") and (auth_count == 0 and extract_signals == 0) and fwh < 5)
+            scope = list(better.get("path_prefixes") or [])
+            if weak_focus or low_auth_for_help or router_mode == "router":
+                rdocs = rag_search(question, path_filters=scope, k=5, debug=verbose, source_types=pol_sources)
+                if rdocs:
+                    better["rag_chunks"] = rdocs
+                    if verbose:
+                        print(f"Added {len(rdocs)} RAG chunks (scoped) to bundle", file=sys.stderr)
+        except Exception as e:
+            if verbose:
+                print(f"RAG adapter not available or failed: {e}", file=sys.stderr)
+
     if verbose:
         print(f"Follow-up results:", file=sys.stderr)
         print(f"  Dirs found: {bundle2.get('dirs_found', 0)}", file=sys.stderr)

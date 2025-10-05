@@ -23,15 +23,15 @@ except Exception:
     pass
 
 
-def run_focus_llm(question: str, base: Path, trace_file: Path | None = None, llm_verbose: bool = False, llm_debug: bool = False) -> Tuple[str, float, bool]:
+def run_focus_llm(question: str, bases: List[Path], trace_file: Path | None = None, llm_verbose: bool = False, llm_debug: bool = False) -> Tuple[str, float, bool]:
     """Run focus_llm and return (answer, latency_seconds, success)"""
     cmd = [
         sys.executable,
         str(Path(__file__).resolve().parents[1] / "focus_llm.py"),
         question,
-        "-b",
-        str(base),
     ]
+    for b in bases:
+        cmd.extend(["-b", str(b)])
     
     if trace_file:
         cmd.extend(["--trace-out", str(trace_file)])
@@ -167,7 +167,7 @@ def llm_grade(expected: str, actual: str) -> Tuple[int, str]:
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark focus_llm against AMP test questions")
-    parser.add_argument("-b", "--base", required=True, help="Base repository path")
+    parser.add_argument("-b", "--base", action="append", required=True, help="Base repository path (repeatable)")
     parser.add_argument("--csv", default="AMP_Test_Questions.csv", help="CSV file with questions")
     parser.add_argument("--trace-dir", default=None, help="Directory to save trace files")
     parser.add_argument("--auto-grade", action="store_true", help="Use automatic grading (heuristic)")
@@ -179,11 +179,12 @@ def main():
     
     args = parser.parse_args()
     
-    base = Path(args.base).expanduser().resolve()
+    bases = [Path(b).expanduser().resolve() for b in args.base]
     csv_path = Path(args.csv)
     
-    if not base.exists():
-        print(f"Error: Base path not found: {base}", file=sys.stderr)
+    missing_bases = [str(b) for b in bases if not b.exists()]
+    if missing_bases:
+        print(f"Error: Base path(s) not found: {', '.join(missing_bases)}", file=sys.stderr)
         return 1
     
     if not csv_path.exists():
@@ -203,7 +204,9 @@ def main():
         questions = list(reader)
     
     print(f"Loaded {len(questions)} questions from {csv_path}")
-    print(f"Base repository: {base}")
+    print("Base repositories:")
+    for b in bases:
+        print(f"  - {b}")
     print(f"Auto-grading: {args.auto_grade}")
     print()
     
@@ -224,7 +227,7 @@ def main():
         if trace_dir:
             trace_file = trace_dir / f"trace_{i:02d}.json"
         
-        actual, latency, success = run_focus_llm(question, base, trace_file, args.llm_verbose, args.llm_debug)
+        actual, latency, success = run_focus_llm(question, bases, trace_file, args.llm_verbose, args.llm_debug)
         total_latency += latency
         
         print(f"  ⏱️  Latency: {latency:.2f}s")
