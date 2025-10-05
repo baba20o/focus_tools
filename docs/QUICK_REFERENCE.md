@@ -94,6 +94,19 @@ python focus_grep.py "<pattern>" --stdin-paths --regex -i --json
 python focus_probe.py <keyword> "<pattern>" \
   -b ./repo1 -b ./repo2 -b ./repo3 \
   --json
+
+### **Enable Scoped RAG (Optional)**
+```bash
+# Allow router to fall back to RAG (scoped by Focus path_prefixes)
+ALLOW_RAG=1 FOCUS_USE_MINI=1 \
+  python scripts/benchmark.py -b ./repo1 -b ./repo2 \
+  --csv data/ros2qa.csv --llm-grade --llm-verbose
+
+# Pin sources for a run (e.g., docs only)
+ALLOW_RAG=1 FOCUS_USE_MINI=1 \
+  python focus_llm.py "question" -b ./repo \
+  --allow-rag --router-mode policy --rag-sources notion,github_docs --verbose
+```
 ```
 
 ### **Export to File**

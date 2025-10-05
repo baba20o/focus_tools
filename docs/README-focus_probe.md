@@ -85,6 +85,13 @@ Output:
 
 --prefixes-only (prints prefixes only; no JSON)
 
+Scoped RAG integration (via focus_llm)
+
+- focus_llm can optionally call a scoped RAG fallback when Focus evidence is weak.
+- Enable by setting `ALLOW_RAG=1` (or pass `--allow-rag` to focus_llm).
+- Router policy (docs/router_policy.json) controls which categories allow RAG and which sources to use (e.g., `notion`, `github_docs`, `code`).
+- You can pin sources for a run with `--rag-sources notion,github_docs` and force mode with `--router-mode policy|router|auto`.
+
 Examples
 1) Teleop scout (code+docs) with JSON bundle
 python focus_probe.py spot "(teleop|wasd|rviz|launch)" -b ./bdai-main --must-parent src `

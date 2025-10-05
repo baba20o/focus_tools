@@ -26,6 +26,7 @@ $env:FOCUS_USE_MINI='0'; python scripts/benchmark.py -b C:\test_repos\bdai-main 
 - **Judge**: Uses LLM (OPENAI_MINI_MODEL) to assess evidence quality (one bounded follow-up) - YES LLM call
 - **Rescore**: Uses LLM (OPENAI_MINI_MODEL) to rank file heads (60/40 with probe rank) - YES LLM call
 - **Answer**: Uses main LLM (OPENAI_MODEL) - YES LLM call
+ - (Optional) Scoped RAG fallback: controlled by `ALLOW_RAG`/`--allow-rag` and router policy, executed once if Focus evidence is weak.
 
 **Characteristics:**
 - ✅ Accuracy: **Higher** (intelligent query classification + evidence judging)
@@ -109,6 +110,14 @@ $env:FOCUS_USE_MINI='1'; python scripts/benchmark.py `
 ```
 
 To print prompts/outputs to console, add `--llm-debug` (or set `FOCUS_DEBUG_LLM=1`).
+
+## Router & RAG Controls (Optional)
+
+- Enable RAG fallback: `ALLOW_RAG=1` or pass `--allow-rag` to focus_llm.
+- Router policy file: `docs/router_policy.json` (per-category `allow_rag`, `source_types`, optional `router_mode`).
+- CLI overrides:
+  - `--router-mode policy|router|auto`
+  - `--rag-sources notion,github_docs`
 
 ## Verification
 

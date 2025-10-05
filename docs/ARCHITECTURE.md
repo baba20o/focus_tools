@@ -289,6 +289,24 @@ def pattern_scoped_rag(question: str) -> dict:
 
 ---
 
+### Scoped RAG Details (Router + Policy)
+
+- Enable via env `ALLOW_RAG=1` or focus_llm flag `--allow-rag`.
+- Router decides per category; defaults:
+  - `troubleshooting`, `docs_guidelines` → allowed
+  - `schema`, `definition` → Focus‑only
+- Policy file `docs/router_policy.json` can override per category: `{ allow_rag: bool, source_types: ["notion","github_docs","code", ...], router_mode: "policy|router|auto" }`.
+- CLI overrides:
+  - `--router-mode policy|router|auto` to force how we decide sources
+  - `--rag-sources notion,github_docs` to pin sources for the run
+- Adapter (`focus_rag_adapter.py`) scopes retrieval to Focus `path_prefixes` and forwards `include_sources` to the EIS engine. Results are merged into the bundle under `RAG CHUNKS` with clear provenance.
+
+Safety:
+- Exactly one RAG pass after Focus follow‑up; small `k` (3–5).
+- Keep Focus evidence first; refuse speculation if both are weak.
+
+---
+
 ## 🎛️ Configuration System
 
 ### Hierarchy (Most specific wins)

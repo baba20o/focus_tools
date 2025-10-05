@@ -23,7 +23,7 @@ except Exception:
     pass
 
 
-def run_focus_llm(question: str, bases: List[Path], trace_file: Path | None = None, llm_verbose: bool = False, llm_debug: bool = False) -> Tuple[str, float, bool]:
+def run_focus_llm(question: str, bases: List[Path], trace_file: Path | None = None, llm_verbose: bool = False, llm_debug: bool = False, timeout_seconds: int = 120) -> Tuple[str, float, bool]:
     """Run focus_llm and return (answer, latency_seconds, success)"""
     cmd = [
         sys.executable,
@@ -46,7 +46,7 @@ def run_focus_llm(question: str, bases: List[Path], trace_file: Path | None = No
             cmd,
             capture_output=True,
             text=True,
-            timeout=120  # 2 minute timeout per question
+            timeout=timeout_seconds
         )
         latency = time.time() - start
         
@@ -58,7 +58,7 @@ def run_focus_llm(question: str, bases: List[Path], trace_file: Path | None = No
         
     except subprocess.TimeoutExpired:
         latency = time.time() - start
-        return "[TIMEOUT: Exceeded 120s]", latency, False
+        return f"[TIMEOUT: Exceeded {timeout_seconds}s]", latency, False
     except Exception as e:
         latency = time.time() - start
         return f"[EXCEPTION: {str(e)}]", latency, False
@@ -176,6 +176,7 @@ def main():
     parser.add_argument("--llm-verbose", action="store_true", help="Pass --verbose to focus_llm for step logging")
     parser.add_argument("--llm-debug", action="store_true", help="Pass --debug-llm to focus_llm to show prompts and outputs")
     parser.add_argument("--start-from", type=int, default=0, help="Start from question N (0-indexed)")
+    parser.add_argument("--timeout-seconds", type=int, default=120, help="Per-question timeout for focus_llm (seconds)")
     
     args = parser.parse_args()
     
@@ -227,7 +228,7 @@ def main():
         if trace_dir:
             trace_file = trace_dir / f"trace_{i:02d}.json"
         
-        actual, latency, success = run_focus_llm(question, bases, trace_file, args.llm_verbose, args.llm_debug)
+        actual, latency, success = run_focus_llm(question, bases, trace_file, args.llm_verbose, args.llm_debug, args.timeout_seconds)
         total_latency += latency
         
         print(f"  ⏱️  Latency: {latency:.2f}s")

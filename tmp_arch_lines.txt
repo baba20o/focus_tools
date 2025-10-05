@@ -1,0 +1,623 @@
+1	# Focus Tools - Architecture & LLM Integration Guide
+2	
+3	**Version 1.0 | October 2025**
+4	
+5	---
+6	
+7	## 📐 System Architecture
+8	
+9	### High-Level Overview
+10	
+11	```
+12	┌─────────────────────────────────────────────────────────────┐
+13	│                      USER QUESTION                           │
+14	└──────────────────────┬──────────────────────────────────────┘
+15	                       ↓
+16	┌─────────────────────────────────────────────────────────────┐
+17	│              LLM COMMANDER (Router + Orchestrator)           │
+18	│  • Profile selection (rules-based or LLM-inferred)          │
+19	│  • Parameter synthesis (keyword, pattern, filters)          │
+20	│  • Quality gates (confidence scoring)                       │
+21	└──────────────────────┬──────────────────────────────────────┘
+22	                       ↓
+23	┌─────────────────────────────────────────────────────────────┐
+24	│                   FOCUS TOOLS SUITE                          │
+25	│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
+26	│  │ focus_tree   │  │ focus_grep   │  │ focus_probe  │      │
+27	│  │              │  │              │  │              │      │
+28	│  │ Discover     │  │ Search       │  │ All-in-one   │      │
+29	│  │ directories  │→ │ content      │→ │ pipeline     │      │
+30	│  │              │  │              │  │              │      │
+31	│  └──────────────┘  └──────────────┘  └──────────────┘      │
+32	│                           ↓                                  │
+33	│                  ┌─────────────────┐                        │
+34	│                  │ focus_common    │                        │
+35	│                  │ • Config loader │                        │
+36	│                  │ • Profile system│                        │
+37	│                  │ • Alias expansion│                       │
+38	│                  │ • Token budgeting│                       │
+39	│                  │ • Weights/ranking│                       │
+40	│                  └─────────────────┘                        │
+41	└──────────────────────┬──────────────────────────────────────┘
+42	                       ↓
+43	┌─────────────────────────────────────────────────────────────┐
+44	│                   ENRICHED CONTEXT BUNDLE                    │
+45	│  • Top-N ranked files (by relevance)                        │
+46	│  • Snippets with context (±N lines)                         │
+47	│  • Structural previews (head/tail peeks)                    │
+48	│  • Cluster analysis (directory concentration)               │
+49	│  • Token estimates (budget compliance)                      │
+50	└──────────────────────┬──────────────────────────────────────┘
+51	                       ↓
+52	┌─────────────────────────────────────────────────────────────┐
+53	│              LLM SYNTHESIZER (Answer Generator)              │
+54	│  • Evidence-grounded generation                             │
+55	│  • Source citation (file:line)                              │
+56	│  • Confidence scoring                                       │
+57	│  • Follow-up probe requests (optional)                      │
+58	└──────────────────────┬──────────────────────────────────────┘
+59	                       ↓
+60	                   ANSWER
+61	```
+62	
+63	---
+64	
+65	## 🔄 Data Flow
+66	
+67	### 1. **Input Layer**
+68	```python
+69	{
+70	    "question": "How do I teleop Spot with RViz?",
+71	    "context": {
+72	        "base_paths": ["./bdai-main"],
+73	        "preferences": {...}
+74	    }
+75	}
+76	```
+77	
+78	### 2. **Routing Layer**
+79	```python
+80	{
+81	    "strategy": "profile",  # or "synthesize"
+82	    "profile": "teleop-scout",
+83	    "keyword": "spot",
+84	    "overrides": {}
+85	}
+86	```
+87	
+88	### 3. **Retrieval Layer** (focus_probe)
+89	```python
+90	{
+91	    "dirs_found": 7,
+92	    "files_scanned": 234,
+93	    "files_with_hits": 15,
+94	    "top_files": [
+95	        {
+96	            "path": ".../spot_rviz_teleop.launch.py",
+97	            "score": 12.5,
+98	            "hits": 5,
+99	            "snippets": [...],
+100	            "peek_head": [...],
+101	            "peek_tail": [...]
+102	        },
+103	        ...
+104	    ],
+105	    "clusters": {
+106	        "ws/src/spot_utilities/launch": 6,
+107	        "ws/src/spot_driver": 2
+108	    },
+109	    "token_estimate": 3200
+110	}
+111	```
+112	
+113	### 4. **Synthesis Layer**
+114	```python
+115	{
+116	    "answer": "To teleop Spot with RViz, run:\n...",
+117	    "sources": [
+118	        "spot_rviz_teleop.launch.py:42-58",
+119	        "spot_utilities/README.md:89-102"
+120	    ],
+121	    "confidence": 0.95,
+122	    "method": "teleop-scout profile"
+123	}
+124	```
+125	
+126	---
+127	
+128	## 🧠 LLM Integration Patterns
+129	
+130	### Pattern 1: **Profile-First (Fast Path - 80% of queries)**
+131	
+132	```python
+133	def pattern_profile_first(question: str) -> dict:
+134	    """
+135	    Use when question maps to known profile.
+136	    Latency: 8-12s | Cost: $0.01 | Accuracy: 90%+
+137	    """
+138	    # Rule-based routing
+139	    profile = match_profile(question)  # Simple keyword rules
+140	    
+141	    # Run probe
+142	    bundle = focus_probe.run(
+143	        keyword=extract_keyword(question),
+144	        profile=profile,
+145	        budget_tokens=8000
+146	    )
+147	    
+148	    # Synthesize
+149	    if bundle.files_with_hits >= 3:
+150	        return llm.generate(question, bundle)
+151	    else:
+152	        return pattern_synthesize(question)  # Fallback
+153	```
+154	
+155	**When to use:**
+156	- Question contains clear intent keywords ("launch", "teleop", "config")
+157	- Similar questions have been answered before
+158	- Speed is critical
+159	
+160	**Examples:**
+161	- "How do I launch X?"
+162	- "What does function Y do?"
+163	- "Where is Z configured?"
+164	
+165	---
+166	
+167	### Pattern 2: **Synthesize (Flex Path - 15% of queries)**
+168	
+169	```python
+170	def pattern_synthesize(question: str) -> dict:
+171	    """
+172	    Use when no profile matches or question is unusual.
+173	    Latency: 12-18s | Cost: $0.02 | Accuracy: 85%+
+174	    """
+175	    # LLM generates probe parameters
+176	    params = llm.synthesize_probe_params(
+177	        question=question,
+178	        available_profiles=list_profiles(),
+179	        guidelines=PROBE_SYNTHESIS_RUBRIC
+180	    )
+181	    
+182	    # Run probe with synthesized params
+183	    bundle = focus_probe.run(**params)
+184	    
+185	    # Quality gate
+186	    if bundle.is_weak():
+187	        # Broaden once
+188	        relaxed = relax_filters(params)
+189	        bundle = focus_probe.run(**relaxed)
+190	    
+191	    return llm.generate(question, bundle)
+192	```
+193	
+194	**When to use:**
+195	- No profile matches
+196	- Novel question type
+197	- Cross-domain query
+198	
+199	**Examples:**
+200	- "Compare authentication methods across services"
+201	- "Find all TODO comments in recent commits"
+202	- "Which configs affect network latency?"
+203	
+204	---
+205	
+206	### Pattern 3: **Iterative Refinement (Complex Path - 5% of queries)**
+207	
+208	```python
+209	def pattern_iterative(question: str) -> dict:
+210	    """
+211	    Use for complex multi-step investigations.
+212	    Latency: 20-40s | Cost: $0.05 | Accuracy: 90%+
+213	    """
+214	    # Initial probe
+215	    bundle1 = pattern_profile_first(question)
+216	    
+217	    # LLM decides: sufficient?
+218	    decision = llm.evaluate_sufficiency(question, bundle1)
+219	    
+220	    if decision.sufficient:
+221	        return llm.generate(question, bundle1)
+222	    
+223	    # Follow-up probe with refined params
+224	    refined_params = llm.refine_probe(
+225	        question=question,
+226	        initial_bundle=bundle1,
+227	        gaps=decision.gaps
+228	    )
+229	    
+230	    bundle2 = focus_probe.run(**refined_params)
+231	    
+232	    # Merge context
+233	    merged = merge_bundles(bundle1, bundle2)
+234	    
+235	    return llm.generate(question, merged)
+236	```
+237	
+238	**When to use:**
+239	- Initial results are close but incomplete
+240	- Question has multiple sub-questions
+241	- Cross-reference needed
+242	
+243	**Examples:**
+244	- "How do components A and B interact?"
+245	- "What's the full lifecycle of X?"
+246	- "Find all dependencies of Y"
+247	
+248	---
+249	
+250	### Pattern 4: **Scoped RAG Fallback (Rare - 5% of queries)**
+251	
+252	```python
+253	def pattern_scoped_rag(question: str) -> dict:
+254	    """
+255	    Use when structural search fails but directories are known.
+256	    Latency: 25-50s | Cost: $0.08 | Accuracy: 75%+
+257	    """
+258	    # Try structural search first
+259	    bundle = pattern_synthesize(question)
+260	    
+261	    if bundle.confidence < 0.5:
+262	        # RAG scoped to directories probe found
+263	        rag_chunks = rag.search(
+264	            question,
+265	            path_filter=bundle.path_prefixes,  # KEY: scoped to probe dirs
+266	            k=5  # Small k, since scoped
+267	        )
+268	        
+269	        # Merge
+270	        context = {
+271	            "structural": bundle.top_files,
+272	            "semantic": rag_chunks
+273	        }
+274	        
+275	        return llm.generate(question, context)
+276	    
+277	    return llm.generate(question, bundle)
+278	```
+279	
+280	**When to use:**
+281	- Structural search found directories but wrong files
+282	- Question requires deep semantic understanding
+283	- Concept-based search (not keyword)
+284	
+285	**Examples:**
+286	- "What design patterns are used?"
+287	- "Explain the error handling philosophy"
+288	- "How is state managed?"
+289	
+290	---
+291	
+292	## 🎛️ Configuration System
+293	
+294	### Hierarchy (Most specific wins)
+295	
+296	```
+297	1. CLI arguments          (highest priority)
+298	   ↓
+299	2. Per-repo config       (.focus_config.yaml in repo root)
+300	   ↓
+301	3. User global config    (~/.focus_config.yaml)
+302	   ↓
+303	4. Tool defaults         (coded in focus_common.py)
+304	```
+305	
+306	### Profile Anatomy
+307	
+308	```yaml
+309	profiles:
+310	  teleop-scout:
+311	    # Discovery filters
+312	    must_parent_all: [ws, src]        # Path must contain ALL
+313	    must_parent: [ros2]                # Path must contain ANY
+314	    not_parent: [tests, examples]     # Path must contain NONE
+315	    name_regex: "spot_.*"              # Directory name matches
+316	    name_exact: [spot_teleop]          # Or exact match
+317	    
+318	    # Content search
+319	    pattern: "(teleop|rviz|launch|cmd_vel)"  # Grep pattern
+320	    regex: true                        # Treat as regex
+321	    ignore_case: true                  # Case-insensitive
+322	    
+323	    # File filtering
+324	    include: ["*.py", "*.launch.py", "*.md"]  # File types
+325	    exclude: ["*.pyc", "*.log"]        # Exclude patterns
+326	    
+327	    # Ranking & limits
+328	    weights: {.launch.py: 2.0, .md: 1.5}  # File type importance
+329	    top_files: 8                       # Return top N
+330	    context: 3                         # Lines around matches
+331	    
+332	    # Enrichment
+333	    peek: true                         # Include head/tail
+334	    peek_head_lines: 80
+335	    peek_tail_lines: 40
+336	    read_bytes: 12000                  # Include full content
+337	    ascii_tree: false                  # Directory trees
+338	    
+339	    # Budget
+340	    budget_tokens: 8000                # Token limit
+341	```
+342	
+343	---
+344	
+345	## 📊 Quality Metrics
+346	
+347	### Probe Quality Score
+348	
+349	```python
+350	def compute_quality_score(bundle: dict) -> float:
+351	    """
+352	    Returns 0.0-1.0 confidence score.
+353	    """
+354	    score = 0.0
+355	    
+356	    # File count (0.3 weight)
+357	    files_score = min(bundle.files_with_hits / 5, 1.0) * 0.3
+358	    
+359	    # Cluster concentration (0.4 weight)
+360	    # High when most files from same directory
+361	    cluster_score = max_cluster_concentration(bundle.clusters) * 0.4
+362	    
+363	    # Token efficiency (0.2 weight)
+364	    # High when token_estimate is reasonable
+365	    token_score = (1.0 - min(bundle.token_estimate / 10000, 1.0)) * 0.2
+366	    
+367	    # Hit density (0.1 weight)
+368	    # High when few files have many hits
+369	    density_score = compute_hit_density(bundle.top_files) * 0.1
+370	    
+371	    return files_score + cluster_score + token_score + density_score
+372	
+373	def is_weak(bundle: dict) -> bool:
+374	    """
+375	    True if bundle likely needs broadening or RAG fallback.
+376	    """
+377	    return (
+378	        bundle.files_with_hits < 3 or
+379	        compute_quality_score(bundle) < 0.5 or
+380	        max_cluster_concentration(bundle.clusters) < 0.3
+381	    )
+382	```
+383	
+384	### Answer Quality Evaluation
+385	
+386	```python
+387	def evaluate_answer(question: str, answer: str, bundle: dict) -> dict:
+388	    """
+389	    Post-generation quality check.
+390	    """
+391	    return {
+392	        "has_sources": count_citations(answer) > 0,
+393	        "cites_top_files": citations_match_bundle(answer, bundle),
+394	        "confidence": answer_confidence_score(answer),
+395	        "token_efficiency": len(answer) / bundle.token_estimate,
+396	        "needs_followup": answer.contains("insufficient information")
+397	    }
+398	```
+399	
+400	---
+401	
+402	## 🚀 Deployment Patterns
+403	
+404	### Minimal Agent (Starter)
+405	
+406	```python
+407	import focus_probe
+408	import openai
+409	
+410	SIMPLE_PROFILES = {
+411	    "launch": "teleop-scout",
+412	    "doc": "doc-hunter",
+413	    "config": "config-audit",
+414	    "message": "msg-schema-hunter"
+415	}
+416	
+417	def simple_agent(question: str, base_path: str) -> str:
+418	    # Simple keyword routing
+419	    profile = None
+420	    for keyword, prof in SIMPLE_PROFILES.items():
+421	        if keyword in question.lower():
+422	            profile = prof
+423	            break
+424	    
+425	    # Run probe
+426	    bundle = focus_probe.run(
+427	        keyword=extract_first_word(question),
+428	        pattern=question,  # Use question as pattern
+429	        base=base_path,
+430	        profile=profile,
+431	        top_files=8,
+432	        peek=True,
+433	        budget_tokens=8000
+434	    )
+435	    
+436	    # LLM synthesis
+437	    prompt = f"""
+438	    Question: {question}
+439	    
+440	    Evidence:
+441	    {format_bundle(bundle)}
+442	    
+443	    Answer the question using only the evidence. Cite file:line.
+444	    """
+445	    
+446	    return openai.chat(prompt)
+447	```
+448	
+449	---
+450	
+451	### Production Agent (Full Featured)
+452	
+453	```python
+454	class FocusAgent:
+455	    def __init__(self, config_path: str, cache_dir: str):
+456	        self.config = load_config(config_path)
+457	        self.cache = CacheLayer(cache_dir)
+458	        self.analytics = AnalyticsLogger()
+459	        
+460	    def answer(self, question: str, base_paths: List[str]) -> dict:
+461	        # Route
+462	        route = self.route_question(question)
+463	        
+464	        # Check cache
+465	        cache_key = self.cache.key(question, route, base_paths)
+466	        if cached := self.cache.get(cache_key):
+467	            return cached
+468	        
+469	        # Probe (with retry logic)
+470	        bundle = self.probe_with_quality_gates(
+471	            question=question,
+472	            route=route,
+473	            base_paths=base_paths
+474	        )
+475	        
+476	        # Synthesize
+477	        answer = self.synthesize_answer(question, bundle)
+478	        
+479	        # Log
+480	        self.analytics.log({
+481	            "question": question,
+482	            "route": route,
+483	            "bundle_stats": bundle.stats,
+484	            "answer_quality": evaluate_answer(question, answer, bundle)
+485	        })
+486	        
+487	        # Cache
+488	        self.cache.set(cache_key, answer)
+489	        
+490	        return answer
+491	    
+492	    def probe_with_quality_gates(self, question, route, base_paths):
+493	        """Implements Pattern 3: Iterative Refinement"""
+494	        bundle = focus_probe.run(
+495	            **route.params,
+496	            bases=base_paths
+497	        )
+498	        
+499	        if is_weak(bundle):
+500	            # Try once with relaxed filters
+501	            relaxed = relax_filters(route.params)
+502	            bundle = focus_probe.run(**relaxed, bases=base_paths)
+503	            
+504	            if is_weak(bundle):
+505	                # Scoped RAG fallback
+506	                rag_chunks = self.rag.search(
+507	                    question,
+508	                    path_filter=bundle.path_prefixes
+509	                )
+510	                bundle = merge(bundle, rag_chunks)
+511	        
+512	        return bundle
+513	```
+514	
+515	---
+516	
+517	## 🧪 Testing & Validation
+518	
+519	### Unit Tests
+520	
+521	```python
+522	def test_profile_selection():
+523	    assert match_profile("how to launch spot") == "teleop-scout"
+524	    assert match_profile("what fields in MultiJointTraj") == "msg-schema-hunter"
+525	
+526	def test_quality_scoring():
+527	    weak_bundle = {"files_with_hits": 1, "clusters": {}}
+528	    assert is_weak(weak_bundle) == True
+529	    
+530	    strong_bundle = {"files_with_hits": 8, "clusters": {"dir1": 6}}
+531	    assert is_weak(strong_bundle) == False
+532	```
+533	
+534	### Integration Tests
+535	
+536	```python
+537	def test_end_to_end():
+538	    question = "How do I teleop Spot?"
+539	    answer = agent.answer(question, ["./test-repo"])
+540	    
+541	    assert "launch" in answer.lower()
+542	    assert len(answer.sources) > 0
+543	    assert answer.confidence > 0.7
+544	```
+545	
+546	### Benchmark Suite
+547	
+548	```python
+549	BENCHMARK_QUESTIONS = [
+550	    {"q": "How do I launch Spot teleop?", "expected_profile": "teleop-scout"},
+551	    {"q": "What fields in MultiJointTraj?", "expected_profile": "msg-schema-hunter"},
+552	    # ... 50 more questions
+553	]
+554	
+555	def run_benchmark():
+556	    results = []
+557	    for item in BENCHMARK_QUESTIONS:
+558	        answer = agent.answer(item["q"], ["./bdai-main"])
+559	        grade = human_grade(item["q"], answer)  # or LLM judge
+560	        results.append({
+561	            "question": item["q"],
+562	            "grade": grade,
+563	            "latency_ms": answer.latency,
+564	            "tokens": answer.token_count,
+565	            "cost": estimate_cost(answer)
+566	        })
+567	    
+568	    print(f"Avg grade: {mean([r['grade'] for r in results])}")
+569	    print(f"Avg latency: {mean([r['latency_ms'] for r in results])}ms")
+570	    print(f"Avg cost: ${mean([r['cost'] for r in results])}")
+571	```
+572	
+573	---
+574	
+575	## 🔮 Future Enhancements
+576	
+577	### Phase 1 (Next 2 Weeks)
+578	- [ ] LLM router implementation
+579	- [ ] Probe parameter synthesis
+580	- [ ] Quality gates + auto-broaden
+581	- [ ] Basic caching
+582	
+583	### Phase 2 (Month 1)
+584	- [ ] Analytics dashboard
+585	- [ ] Profile auto-tuning from logs
+586	- [ ] Multi-repo support
+587	- [ ] Parallel probe execution
+588	
+589	### Phase 3 (Month 2-3)
+590	- [ ] AST-aware parsing (function/class extraction)
+591	- [ ] Dependency graph traversal
+592	- [ ] Interactive wizard mode
+593	- [ ] Web UI
+594	
+595	---
+596	
+597	## 📞 Support & Feedback
+598	
+599	This is a research/internal tool. For questions or collaboration:
+600	- Review the individual tool READMEs
+601	- Check the examples in each file
+602	
+603	---
+604	
+605	## ♻️ Recent Retrieval Enhancements
+606	
+607	- Filename channel: focus_probe can promote candidate files by name using --file-name-regex/--file-name-globs with a configurable --filename-weight. This surfaces canonical targets (e.g., robot_actions.py, pyproject.toml) even when content matches are sparse.
+608	- Include-all breadth: --include-all disables include globs in both content-first and normal modes, ensuring discovery breadth when needed.
+609	- Authority weighting: default (mergeable) boosts for .msg/.idl/.srv/.urdf/.xacro/.toml/.xml and authority dirs (msg/srv/urdf/description/action).
+610	- Structured extractors: peeks now include lightweight extractions when applicable:
+611	  - .msg → extracted_msg_fields
+612	  - .urdf/.xacro → extracted_urdf_joints
+613	  These appear in the bundle/answer summary to guide LLMs without extra tokens.
+614	
+615	## 🧪 Mini‑LLM Switch & Debugging
+616	
+617	- Mini switch: Set FOCUS_USE_MINI=1 to enable mini‑LLM for classify/judge/rescoring; answer uses OPENAI_MODEL. With it off (default), classify is rule‑based and judge assumes sufficient.
+618	- Debugging: pass --debug-llm to focus_llm (or set FOCUS_DEBUG_LLM=1) to print prompts/outputs to stderr. Traces are still written to results/traces/ when running via the benchmark.
+619	- Run with `--debug` for troubleshooting
+620	
+621	---
+622	
+623	**Remember:** Precision beats scale when you have intelligence to aim. 🎯
