@@ -8,30 +8,33 @@
 
 ### **1. How to Launch / Run Something**
 ```bash
-python focus_probe.py <system> -b <repo> \
+python focus_probe.py <system> "(teleop|rviz|cmd_vel)" -b <repo> \
   --profile teleop-scout \
   --top-files 8 --peek --json
 ```
 
+`focus_probe` always needs both `KEYWORD` (directories) and `PATTERN` (grep) positionally; there is no `--pattern` flag. Add `--content-first` when the term is not part of a directory name.
+
 ### **2. Find API / Function Definition**
 ```bash
-python focus_probe.py <function_name> -b <repo> \
+python focus_probe.py <function_name> "def <function>|class.*<function>" -b <repo> \
+  --content-first \
   --include "*.py,*.cpp,*.md" \
-  --pattern "def <function>|class.*<function>" \
   --regex --peek --json
 ```
 
 ### **3. Message / Schema Fields**
 ```bash
-python focus_probe.py <MessageName> -b <repo> \
+python focus_probe.py <MessageName> "<MessageName>" -b <repo> \
+  --content-first \
   --include "*.msg,*.srv,*.idl" \
-  --profile msg-schema-hunter \
   --json
 ```
 
 ### **4. Configuration Parameters**
 ```bash
-python focus_probe.py <param> -b <repo> \
+python focus_probe.py <param> "<param>.*:" -b <repo> \
+  --content-first \
   --include "*.yaml,*.yml" \
   --profile config-audit \
   --json
@@ -39,9 +42,8 @@ python focus_probe.py <param> -b <repo> \
 
 ### **5. Documentation Search**
 ```bash
-python focus_probe.py docs -b <repo> \
+python focus_probe.py docs "<topic>" -b <repo> \
   --profile doc-hunter \
-  --pattern "<topic>" \
   --include "*.md,*.rst" \
   --json
 ```
@@ -70,14 +72,15 @@ python focus_probe.py docs -b <repo> \
 
 ## 📋 **Built-in Profiles**
 
-From `.focus_config.yaml`:
+From the sample `.focus_config.yaml` in this repository. They are only available after you copy that file to a config location below or pass it with `--config`, and only when `pyyaml` is installed. An unknown profile name is silently ignored. A profile's `pattern:` entry is not currently used; pass the pattern on the command line.
 
 | Profile | Use For | Key Features |
 |---------|---------|--------------|
 | `teleop-scout` | Launch/run commands | Prioritizes `.launch.py` files |
 | `doc-hunter` | Documentation | Searches `*.md`, `*.rst` in docs/ |
 | `config-audit` | Config parameters | Targets `*.yaml`, `*.yml` |
-| `msg-schema-hunter` | ROS messages | Prioritizes `.msg`, `.srv`, `.idl` |
+| `ros2-core` | ROS 2 packages | Under `ws/` + `src/`; `*.py`, `*.launch.py`, `*.yaml` |
+| `fast-scan` | Quick baseline | Searches `*.py`, `*.md` only |
 
 ---
 
@@ -128,7 +131,9 @@ python focus_probe.py ... --debug 2> debug.log
 --config ./custom.yaml         # One-off override
 ```
 
-**Priority:** CLI args > per-repo > global > tool defaults
+**Priority:** CLI args > `--config` files > per-repo > global > tool defaults
+
+Only `focus_probe` reads these files, and only when `pyyaml` is installed.
 
 ---
 
@@ -145,7 +150,7 @@ python focus_probe.py ... --debug 2> debug.log
    ```
 
 2. **Use `--peek` for structure preview:**
-   - See first 80 + last 40 lines without reading full file
+   - See the first 400 + last 80 lines by default (`--peek-head-lines`, `--peek-tail-lines`) without reading the full file
    - Helps LLM understand file layout
 
 3. **Token budgeting is your friend:**

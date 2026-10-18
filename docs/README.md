@@ -37,7 +37,7 @@ chmod +x focus_*.py
 python focus_probe.py spot "teleop" -b /path/to/your/repo --top-files 5 --json
 ```
 
-**Requirements:** Python 3.9+, no external dependencies (except optional `pyyaml` for config files)
+**Requirements:** Python 3.9+, no external dependencies (except optional `pyyaml` for config files, aliases and profiles)
 
 ---
 
@@ -95,8 +95,10 @@ profiles:
 
 **Usage:**
 ```bash
-python focus_probe.py spot -b ./repo --profile teleop-scout --json
+python focus_probe.py spot "(teleop|rviz|cmd_vel)" -b ./repo --profile teleop-scout --json
 ```
+
+`focus_probe` always takes two positional arguments: `KEYWORD` (which directories to search) and `PATTERN` (what to grep for). There is no `--pattern` flag, and a `pattern:` entry in a profile is not currently used, so pass the pattern on the command line. Profiles and aliases are only loaded when `pyyaml` is installed; an unknown profile name is silently ignored.
 
 ---
 
@@ -294,44 +296,49 @@ profiles:
 
 Overrides and extends global config for repo-specific conventions.
 
+**How config is loaded (`focus_probe` only):** `~/.focus_config.yaml` is read first, then `.focus_config.yaml` at the root of each `-b` base, then any `--config FILE` paths. Later files win per entry. A profile with the same name replaces the earlier one; its fields are not merged. The `.focus_config.yaml` shipped in this repository is a sample: copy it to one of those locations or pass it with `--config`. `focus_tree` and `focus_grep` do not read config files. From `defaults`, `focus_probe` currently uses only `include` and `exclude`.
+
 ---
 
 ## 🎓 Common Patterns
 
+The first argument is a directory keyword and the second is the grep pattern. When the term you are looking for is not part of a directory name (a function, message or parameter name), add `--content-first` to search the whole base instead of directories matching the keyword.
+
 ### 1. How to Run / Launch
 ```bash
-focus_probe.py <system> -b <repo> --profile teleop-scout --json
+focus_probe.py <system> "(teleop|rviz|cmd_vel)" -b <repo> --profile teleop-scout --json
 ```
 
 ### 2. API / Function Behavior
 ```bash
-focus_probe.py <function_name> -b <repo> \
+focus_probe.py <function_name> "def <function>|<function>\(|class.*<function>" -b <repo> \
+  --content-first \
   --include "*.py,*.cpp,*.md" \
-  --pattern "def <function>|<function>(|class.*<function>" \
   --regex --peek --json
 ```
 
+With `--regex`, escape literal parentheses (`\(`). An invalid regex is not reported as an error; it produces zero hits.
+
 ### 3. Message / Schema Definition
 ```bash
-focus_probe.py <MessageName> -b <repo> \
+focus_probe.py <MessageName> "<MessageName>" -b <repo> \
+  --content-first \
   --include "*.msg,*.srv,*.idl" \
-  --pattern "<MessageName>" \
   --top-files 5 --json
 ```
 
 ### 4. Configuration Parameters
 ```bash
-focus_probe.py <param_name> -b <repo> \
+focus_probe.py <param_name> "<param_name>.*:" -b <repo> \
+  --content-first \
   --include "*.yaml,*.yml,*.json" \
-  --pattern "<param_name>.*:" \
   --regex --top-files 10 --json
 ```
 
 ### 5. Documentation Discovery
 ```bash
-focus_probe.py docs -b <repo> \
+focus_probe.py docs "<topic>" -b <repo> \
   --profile doc-hunter \
-  --pattern "<topic>" \
   --include "*.md,*.rst" \
   --json
 ```

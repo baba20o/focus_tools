@@ -16,7 +16,7 @@ It’s the “Laser-Blaster” you can hand to an LLM before any RAG.
 
 Install
 
-Just run it with Python 3.9+ (no external deps):
+Just run it with Python 3.9+ (no external deps; optional pyyaml is needed for config aliases and profiles):
 
 chmod +x focus_probe.py   # mac/linux optional
 
@@ -26,20 +26,21 @@ python focus_probe.py KEYWORD PATTERN -b BASE [-b BASE ...]
   [--name-exact CSV] [--name-regex REGEX ...]
   [--regex] [-i|--ignore-case]
   [--include CSV] [--exclude CSV] [--exclude-dirs NAME ...]
-  [--context N] [--per-file-snippets N] [--total-snippets N]
-  [--max-file-bytes N] [--top-files N]
-  [--ascii-tree] [--tree-depth N] [--tree-limit N]
-  [--peek] [--read-bytes N]
+  [--context N] [--per-file-limit N] [--total-limit N]
+  [--max-file-bytes N] [--workers N] [--top-files N]
+  [--ascii-tree]
+  [--peek] [--peek-head-lines N] [--peek-tail-lines N] [--read-bytes N]
   [--content-first] [--include-all]
   [--file-name-regex REGEX ...] [--file-name-globs CSV] [--filename-weight X]
-  [--json]
+  [--profile NAME] [--config FILE ...] [--budget-tokens N]
+  [--json] [--output FILE] [--debug] [--no-color]
   [--emit-path-prefixes] [--prefixes-only]
 
 Key ideas
 
-KEYWORD picks the neighborhoods (dirs). Aliases in ALIAS_MAP (e.g., spot → spot_ros2).
+KEYWORD picks the neighborhoods (dirs). Aliases come from the aliases: section of a loaded .focus_config.yaml (e.g., spot → spot_ros2); see README-focus_config.yaml.md.
 
-PATTERN pulls the evidence inside those dirs.
+PATTERN pulls the evidence inside those dirs. Both KEYWORD and PATTERN are required positional arguments; there is no --pattern flag.
 
 Globs & dir filters keep it cheap and focused.
 
@@ -59,7 +60,7 @@ Grep control:
 
 --include "*.py,*.launch.py,*.md", --exclude "*.min.js,*.lock"
 
---context 3, --per-file-snippets 6, --total-snippets 300
+--context 3, --per-file-limit 6, --total-limit 300
 
 Breadth and authority:
 
@@ -75,7 +76,7 @@ Breadth and authority:
 
 Output:
 
---ascii-tree + --tree-depth/--tree-limit
+--ascii-tree (depth 2, up to 200 entries per matched dir)
 
 --peek (head/tail preview), --read-bytes 12000 (bounded content)
 
@@ -114,42 +115,47 @@ Output format (JSON)
   "keyword": "spot",
   "pattern": "(teleop|wasd|rviz|launch)",
   "regex": true,
-  "ignore_case": true,
+  "case_insensitive": true,
   "bases": ["C:/tests/bdai-main"],
   "filters": { "...": "..." },
   "dirs_found": 7,
-  "trees": { "...": "ASCII tree if requested" },
- "hits_total_snippets": 42,
- "files_with_hits": 15,
- "top_files": [
+  "files_scanned": 120,
+  "files_with_hits": 15,
+  "top_count": 8,
+  "top_files": [
    {
      "path": "C:/tests/bdai-main/ws/src/.../spot_rviz_teleop.launch.py",
-     "dir": "C:/tests/bdai-main/ws/src/.../spot_utilities/launch",
      "hits": 3,
      "snippets": [{ "line": 42, "start": 40, "end": 44, "context": [ ... ] }],
-      "peek": { "head": [...], "tail": [...], "total_lines": 120 }    // if --peek
-      "extracted_msg_fields": ["std_msgs/Header header", "float32 time_step", ...], // if .msg
-      "extracted_urdf_joints": ["RJ1","RJ2", ...],                                 // if .urdf/.xacro
-      // "read": "..."                                                // if --read-bytes > 0
+      "peek_head": [{ "line": 1, "text": "..." }, ...],                          // if --peek
+      "peek_tail": [{ "line": 101, "text": "..." }, ...],                        // if --peek
+      "extracted_msg_fields": ["std_msgs/Header header", "float32 time_step", ...], // if .msg (with --peek)
+      "extracted_urdf_joints": ["RJ1","RJ2", ...],                                 // if .urdf/.xacro (with --peek)
+      // "content_head": "..."                                        // if --read-bytes > 0
     }
   ],
+  "clusters": { "...": ["..."] },
+  "trees": { "...": "ASCII tree if --ascii-tree" },
+  "weights": { ".launch.py": 2.0, "...": 1.0 },
+  "profile": "",
   "path_prefixes": [
     "C:/tests/bdai-main/ws/src/.../spot_utilities/launch",
     "C:/tests/bdai-main/ws/src/.../spot_utilities/examples"
-  ]
+  ],
+  "token_estimate": 2400
 }
 
 Exit codes
 
-0 success (even if zero hits, unless --prefixes-only and no prefixes)
+0 success (even if zero dirs or zero hits, unless --prefixes-only and no prefixes)
 
-1 no candidate dirs or (in --prefixes-only) no prefixes
+1 only with --prefixes-only: no candidate dirs or no prefixes
 
 2 argument/usage error
 
 Tips
 
-Keep --top-files modest (8–12) and use --path_prefixes to scope your RAG.
+Keep --top-files modest (8–12) and use --emit-path-prefixes / --prefixes-only (or the path_prefixes JSON field) to scope your RAG.
 
 For the LLM: give it a short “tool card” explaining the knobs it can tune.
 
